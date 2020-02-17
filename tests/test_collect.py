@@ -9,6 +9,7 @@ from click.testing import CliRunner
 import perun.vcs as vcs
 import perun.cli as cli
 import perun.logic.runner as run
+
 import perun.utils as utils
 import perun.collect.complexity.makefiles as makefiles
 import perun.collect.complexity.symbols as symbols
@@ -21,6 +22,7 @@ from perun.profile.factory import Profile
 from perun.utils.helpers import Job
 from perun.utils.structs import Unit, Executable, CollectStatus, RunnerReport
 from perun.workload.integer_generator import IntegerGenerator
+
 
 __author__ = 'Tomas Fiedor'
 

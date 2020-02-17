@@ -8,15 +8,15 @@ from perun.collect.trace.watchdog import WATCH_DOG
 from perun.collect.trace.values import RecordType, TraceRecord
 
 
-def trace_to_profile(data_file, func, static, **kwargs):
-    """Transforms the collection output into the performance profile, where the
-    collected time data are paired and stored as a resources.
+def trace_to_profile(data_file, config, probes, **_):
+    """Transforms the collection output into the performance resources. The
+    collected time data are paired and provided as resources dictionaries.
 
     :param str data_file: name of the collection output file
-    :param dict func: the function probe specifications
-    :param dict static: the static probe specifications as dictionaries
-    :param kwargs: additional parameters
-    :return object: the generator object that produces dictionaries representing the resources
+    :param Configuration config: the configuration object
+    :param Probes probes: the Probes object
+
+    :return iterable: the generator object that produces dictionaries representing the resources
     """
     WATCH_DOG.info('Transforming the raw performance data into a perun profile format')
     trace_stack, sequence_map = {}, {}
@@ -26,22 +26,23 @@ def trace_to_profile(data_file, func, static, **kwargs):
         line = ''
         try:
             # Initialize just in case the trace doesn't have 'begin' statement
-            trace_stack, sequence_map = _init_stack_and_map(func, static)
+            trace_stack, sequence_map = _init_stack_and_map(probes.func, probes.usdt)
             for cnt, line in enumerate(trace):
                 # File starts or ends
                 if line.startswith('begin '):
                     # Initialize stack and map
-                    trace_stack, sequence_map = _init_stack_and_map(func, static)
+                    trace_stack, sequence_map = _init_stack_and_map(probes.func, probes.usdt)
                     continue
                 elif line.startswith('end '):
                     return
                 # Parse the line into the _TraceRecord tuple
                 record = _parse_record(line)
                 # Process the record
-                resource = _process_record(record, trace_stack, sequence_map, static,
-                                           kwargs['global_sampling'])
+                resource = _process_record(
+                    record, trace_stack, sequence_map, probes.usdt_reversed, probes.global_sampling
+                )
                 if resource:
-                    resource['workload'] = kwargs.get('workload', ' '.join(kwargs['workload']))
+                    resource['workload'] = config.executable.workload
                     yield resource
             WATCH_DOG.info('Data to profile transformation finished')
         except Exception:
@@ -51,11 +52,12 @@ def trace_to_profile(data_file, func, static, **kwargs):
             raise
 
 
-def _init_stack_and_map(func, static):
-    """Initializes the data structures of function and static stacks for the trace parsing
+def _init_stack_and_map(func, usdt):
+    """Initializes the data structures of function and USDT stacks for the trace parsing
 
     :param dict func: the function probes
-    :param dict static: the static probes
+    :param dict usdt: the USDT probes
+
     :return tuple: initialized trace stack and sequence map
     """
 
@@ -63,20 +65,21 @@ def _init_stack_and_map(func, static):
         """ Initializes the default dictionaries for the sequence map
 
         :param iterable records: the iterable records
+
         :return dict: the resulting dictionary
         """
         return {record['name']: {'seq': 0, 'sample': record['sample']} for record in records}
 
     # func: thread -> stack (stack list, faults list)
-    # static: thread -> name -> stack
+    # usdt: thread -> name -> stack
     trace_stack = {
         'func': collections.defaultdict(lambda: ([], [])),
-        'static': collections.defaultdict(lambda: collections.defaultdict(list))
+        'usdt': collections.defaultdict(lambda: collections.defaultdict(list))
     }
     # name -> sequence values
     sequence_map = {
         'func': default_sequence_records(func.values()),
-        'static': default_sequence_records(static.values())
+        'usdt': default_sequence_records(usdt.values())
     }
     return trace_stack, sequence_map
 
@@ -97,15 +100,16 @@ def _init_stack_and_map(func, static):
 #         return trace
 
 
-def _process_record(record, trace_stack, sequence_map, static, global_sampling):
+def _process_record(record, trace_stack, sequence_map, usdt_reversed, global_sampling):
     """Process one output file line = record by calling corresponding functions for
     the given record type.
 
     :param namedtuple record: the _TraceRecord namedtuple with parsed line values
     :param dict trace_stack: the trace stack dictionary containing trace stacks for
-                             function / static / etc. probes
-    :param dict sequence_map: the map of sequence numbers for function / static / etc. probe names
-    :param dict static: the list of static probes used for pairing the static records
+                             function / USDT / etc. probes
+    :param dict sequence_map: the map of sequence numbers for function / USDT / etc. probe names
+    :param dict usdt_reversed: the collection of USDT probes used for pairing the USDT records
+
     :return dict: the record transformed into the performance resource or empty dict if no resource
                   could be produced
     """
@@ -115,12 +119,15 @@ def _process_record(record, trace_stack, sequence_map, static, global_sampling):
 
     # The record is function begin or end point
     if record.type == RecordType.FuncBegin or record.type == RecordType.FuncEnd:
-        resource = _process_func_record(record, trace_stack['func'][record.thread],
-                                        sequence_map['func'], global_sampling)
+        resource = _process_func_record(
+            record, trace_stack['func'][record.thread], sequence_map['func'], global_sampling
+        )
         return resource
-    # The record is static probe point
-    resource = _process_static_record(record, trace_stack['static'][record.thread],
-                                      sequence_map['static'], static, global_sampling)
+    # The record is usdt probe point
+    resource = _process_usdt_record(
+        record, trace_stack['usdt'][record.thread], sequence_map['usdt'],
+        usdt_reversed, global_sampling
+    )
     return resource
 
 
@@ -130,6 +137,7 @@ def _process_func_record(record, trace_stack, sequence_map, global_sampling):
     :param namedtuple record: the _TraceRecord namedtuple with parsed line values
     :param list trace_stack: the trace stack for function records
     :param dict sequence_map: stores the sequence counter for every function
+
     :returns dict: the resource dictionary or empty dict
     """
     stack = trace_stack[0]
@@ -187,30 +195,31 @@ def _process_func_record(record, trace_stack, sequence_map, global_sampling):
             'structure-unit-size': matching_record.sequence}
 
 
-def _process_static_record(record, trace_stack, sequence_map, probes, global_sampling):
-    """Processes the static output record and tries to pair it with stack record if possible
+def _process_usdt_record(record, trace_stack, sequence_map, usdt_reversed, global_sampling):
+    """Processes the USDT output record and tries to pair it with stack record if possible
 
     :param namedtuple record: the _TraceRecord namedtuple with parsed line values
-    :param dict trace_stack: the dictionary containing trace stack (list) for each static probe
-    :param dict sequence_map: stores the sequence counter for every static probe
-    :param dict probes: the list of all static probe definitions for pairing
+    :param dict trace_stack: the dictionary containing trace stack (list) for each USDT probe
+    :param dict sequence_map: stores the sequence counter for every USDT probe
+    :param dict usdt_reversed: the USDT reversed probes mapping
+
     :returns dict: the resource dictionary or empty dict
     """
     matching_record = None
 
     try:
-        if record.type == RecordType.StaticSingle:
+        if record.type == RecordType.USDTSingle:
             # The probe is paired with itself, find the last record in the stack if there is any
             if trace_stack[record.name]:
                 matching_record = trace_stack[record.name].pop()
             # Add the record into the trace stack to correctly measure time between each two hits
             _add_to_stack(trace_stack[record.name], sequence_map, record, global_sampling)
-        elif record.type == RecordType.StaticBegin:
-            # Static starting probe, just insert into the stack
+        elif record.type == RecordType.USDTBegin:
+            # USDT starting probe, just insert into the stack
             _add_to_stack(trace_stack[record.name], sequence_map, record, global_sampling)
-        elif record.type == RecordType.StaticEnd:
-            # Static end probe, find the starting probe
-            pair = probes[record.name]['pair'][1]
+        elif record.type == RecordType.USDTEnd:
+            # USDT end probe, find the starting probe
+            pair = usdt_reversed[record.name]
             matching_record = trace_stack[pair].pop()
     except (KeyError, IndexError):
         return {}
@@ -242,6 +251,7 @@ def _parse_record(line):
         record type, call stack offset, rule name, timestamp, thread and sequence.
 
     :param str line: one line from the collection output
+
     :returns namedtuple: the _TraceRecord tuple
     """
 
