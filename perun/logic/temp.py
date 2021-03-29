@@ -52,6 +52,7 @@ When using this interface, the files are not automatically cleaned up when they 
 Thus the user should take care to delete them appropriately to save some memory.
 """
 
+# TODO: simplify the module, allow creation of truly custom temp files (i.e., compressed bz2)
 
 import os
 import json
@@ -171,6 +172,8 @@ def touch_temp_file(file_path, protect=False):
 
     :param str file_path: the temporary file path
     :param bool protect: if True, the temporary file will be indexed as protected
+
+    :return str: the full path to the file
     """
     # Append the file path to the tmp/ directory
     file_path = temp_path(file_path.rstrip(os.sep))
@@ -181,6 +184,7 @@ def touch_temp_file(file_path, protect=False):
     # Register the file as protected if needed
     if protect:
         _add_to_index(file_path, protected=protect)
+    return file_path
 
 
 def exists_temp_dir(dir_path):

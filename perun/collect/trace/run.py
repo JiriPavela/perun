@@ -219,6 +219,8 @@ def teardown(**kwargs):
               help='DEBUG: Maximum number of expected simultaneous threads when sampling is on.')
 @click.option('--no-ds-update', '-nds', is_flag=True, default=False,
               help='DEBUG: Disables Dynamic Stats updates')
+@click.option('--arbiter-on', is_flag=True, default=False,
+              help='Activates optimization arbiter')
 @click.pass_context
 def trace(ctx, **kwargs):
     """Generates `trace` performance profile, capturing running times of
