@@ -12,9 +12,14 @@
     *bottom processes are those that spawn no other process
 """
 
+import bz2
+import pickle
 import array
 import collections
 import numpy as np
+
+import perun.logic.temp as temp
+import perun.utils.metrics as metrics
 
 # The quartiles
 _Q1, _Q2, _Q3 = 25, 50, 75
@@ -55,6 +60,9 @@ class DynamicStats:
         stats = cls()
         func_values, process_records = stats_data['f'], stats_data['p']
         stats.threads = stats_data['t']
+        _store_durations(func_values)
+        # TODO: temporary merge the caller contexts
+        func_values = _merge_caller_contexts(func_values)
 
         # func_values, process_records = stats._process_resources_of(profile)
         stats.compute_process_hierarchy(process_records)
@@ -241,7 +249,7 @@ def _compute_func_stats(values, func_sample):
     """
     # Sort the 'amount' values in order to compute various statistics
     # inclusive, exclusive = map(list, zip(*values))
-    inclusive = np.array(values['i'])
+    inclusive = np.frombuffer(values['i'], dtype=values['i'].typecode)
     inclusive.sort()
     exclusive = values['e']
 
@@ -261,3 +269,40 @@ def _compute_func_stats(values, func_sample):
     }
     func_stats['IQR'] = func_stats['Q3'] - func_stats['Q1']
     return func_stats
+
+
+def _store_durations(func_durations):
+    if not metrics.is_enabled():
+        return
+
+    # Strip the .json from the file and add gz2 suffix
+    file_name = metrics.Metrics.metrics_filename
+    if file_name.endswith(".json"):
+        file_name = file_name[:-len(".json")] + "_" + metrics.Metrics.metrics_id + '.pbz2'
+    file_path = temp.touch_temp_file(file_name)
+
+    with bz2.BZ2File(file_path, 'wb') as file_handle:
+        # The defaultdict must be converted to dict
+        pickle.dump({
+            tid: {
+                caller: dict(uids) for caller, uids in callers.items()
+            } for tid, callers in func_durations.items()
+        }, file_handle, pickle.HIGHEST_PROTOCOL)
+
+
+def _merge_caller_contexts(func_stats):
+    # tid -> caller -> uid -> {'e': [amounts], 'i': [amounts]}
+    # tid -> uid -> {'e': [amounts], 'i': [amounts]}
+    # Build new func contexts
+    merged_context = collections.defaultdict(lambda: collections.defaultdict(
+        lambda: {'e': array.array('Q'), 'i': array.array('Q')}
+    ))
+    for tid, callers in func_stats.items():
+        for caller, uids in callers.items():
+            for uid, amounts in list(uids.items()):
+                merged_context[tid][uid]['e'].extend(amounts['e'])
+                merged_context[tid][uid]['i'].extend(amounts['i'])
+                del func_stats[tid][caller][uid]
+
+    return merged_context
+

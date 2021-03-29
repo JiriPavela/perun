@@ -18,6 +18,8 @@ def filter_functions(call_graph, stats_map, checks):
     :param CallGraphResource call_graph: the CGR optimization resource
     :param dict stats_map: the Dynamic Stats resource
     :param list checks: the list of checks to run
+
+    :return set: a set of functions that are removed by the method
     """
     filtered_funcs = []
     changes = call_graph.get_diff()
@@ -35,7 +37,7 @@ def filter_functions(call_graph, stats_map, checks):
                 break
 
     # Finally remove the filtered functions
-    call_graph.remove_or_filter(filtered_funcs)
+    return set(filtered_funcs)
 
 
 def call_limit_filter(stats, func, threshold, **_):

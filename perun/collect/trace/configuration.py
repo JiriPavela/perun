@@ -45,6 +45,7 @@ class Configuration:
     :ivar str files_dir: the directory path of the temporary files
     :ivar str locks_dir: the directory path of the lock files
     :ivar dict stats_data: compactly stores data necessary for building dynamic stats
+    :ivar bool arbiter: optimization arbiter enabled / disabled
     """
     def __init__(self, executable, **cli_config):
         """ Constructs the Configuration object from the supplied CLI configuration
@@ -69,6 +70,7 @@ class Configuration:
         self.maximum_threads = cli_config.get('max_simultaneous_threads', 5)
         self.extract_mcg = cli_config.get('extract_mixed_cg', False)
         self.no_ds_update = cli_config.get('no_ds_update', False)
+        self.arbiter = cli_config.get('arbiter_on', False)
         # The run optimization values should be provided by the Optimization module, if enabled
         self.run_optimizations = []
         self.run_optimization_parameters = {}

@@ -36,6 +36,7 @@ class CollectOptimization:
     :ivar CallGraphResource call_graph: and CFG structures of the current project version
     :ivar CallGraphResource call_graph_old: CG and CFG structures of the previously profiled version
     :ivar DynamicStats dynamic_stats: the Dynamic Stats resource, if available
+    :ivar dict filter_arbiter: keeps track of consensus among methods for filtering functions
     """
     # The classification of methods to their respective optimization phases
     __pre = {
@@ -67,6 +68,7 @@ class CollectOptimization:
         self.call_graph = None
         self.call_graph_old = None
         self.dynamic_stats = DynamicStats()
+        self.filter_arbiter = {'counter': 0, 'funcs': {}}
 
     def set_pipeline(self, pipeline_name):
         """ Set the used Pipeline.
@@ -240,25 +242,25 @@ class CollectOptimization:
                 # The match mode simply uses the call graph functions
                 pass
             elif mode == CGShapingMode.BOTTOM_UP:
-                proj.cg_bottom_up(
+                self._add_filtered(proj.cg_bottom_up(
                     self.call_graph,
                     self.params[Parameters.CG_PROJ_LEVELS]
-                )
+                ))
             elif mode == CGShapingMode.TOP_DOWN:
-                proj.cg_top_down(
+                self._add_filtered(proj.cg_top_down(
                     self.call_graph,
                     self.params[Parameters.CG_PROJ_LEVELS],
                     self.params[Parameters.CG_PROJ_KEEP_LEAF]
-                )
+                ))
 
         # Perform the static baseline
         if Optimizations.BASELINE_STATIC in optimizations:
-            sbase.complexity_filter(
+            self._add_filtered(sbase.complexity_filter(
                 self.call_graph,
                 self.params[Parameters.SOURCE_FILES],
                 self.params[Parameters.STATIC_COMPLEXITY],
                 self.params[Parameters.STATIC_KEEP_TOP]
-            )
+            ))
 
         checks = [
             (dbase.call_limit_filter, self.params[Parameters.DYNBASE_HARD_THRESHOLD]),
@@ -266,13 +268,18 @@ class CollectOptimization:
             (dbase.wrapper_filter, 0),
         ]
         if Optimizations.BASELINE_DYNAMIC in optimizations:
-            dbase.filter_functions(self.call_graph, self.dynamic_stats.global_stats, checks)
+            self._add_filtered(
+                dbase.filter_functions(self.call_graph, self.dynamic_stats.global_stats, checks)
+            )
         if Optimizations.DYNAMIC_SAMPLING in optimizations:
-            sampling.set_sampling(
+            self._add_filtered(sampling.set_sampling(
                 self.call_graph, self.dynamic_stats.global_stats,
                 self.params[Parameters.DYNSAMPLE_STEP],
                 self.params[Parameters.DYNSAMPLE_THRESHOLD]
-            )
+            ))
+
+        # Filter functions identified by the arbiter
+        self.call_graph.remove_or_filter(self._get_arbiter_result(config.arbiter))
 
         # Extract the remaining functions from the call graph - these should be probed
         diff_solo = len(optimizations) == 1 and Optimizations.DIFF_TRACING in optimizations
@@ -541,6 +548,31 @@ class CollectOptimization:
         for violations in violations_stats.values():
             if violations['check'](call_count_diff):
                 violations['count'] += 1
+
+    def _add_filtered(self, filtered_funcs):
+        """ Add new filtered functions to the arbiter. Arbiter keeps track of how many times
+        certain functions were marked for exclusion.
+
+        :param set filtered_funcs: a set of functions to exclude
+        """
+        if filtered_funcs:
+            self.filter_arbiter['counter'] += 1
+        for func in filtered_funcs:
+            self.filter_arbiter['funcs'][func] = self.filter_arbiter['funcs'].get(func, 0) + 1
+
+    def _get_arbiter_result(self, arbiter_enabled):
+        """ Get arbiter results, i.e., functions that were identified by multiple filtering methods.
+
+        :param bool arbiter_enabled: specifies whether the arbiter is enabled or not
+
+        :return set: set of function names that should be filtered
+        """
+        if not arbiter_enabled or self.filter_arbiter['counter'] <= 1:
+            return set(self.filter_arbiter['funcs'].keys())
+        else:
+            return {
+                f_name for f_name, f_count in self.filter_arbiter['funcs'].items() if f_count >= 2
+            }
 
 
 # Create the Optimization object so that all the affected modules can use it

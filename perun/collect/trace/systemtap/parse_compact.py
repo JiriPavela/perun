@@ -80,9 +80,11 @@ class TransformContext:
         self.dyn_cg = {probe['name']: set() for probe in self.probes.func.values()}
 
         # Compact dictionaries used for computing dynamic stats
-        # tid -> uid -> [amounts]
+        # tid -> caller -> uid -> {'e': [amounts], 'i': [amounts], 'o': [call order]}
         self.funcs = collections.defaultdict(lambda: collections.defaultdict(
-            lambda: {'e': array.array('Q'), 'i': array.array('Q')}))
+            lambda: collections.defaultdict(
+                lambda: {'e': array.array('Q'), 'i': array.array('Q'), 'o': array.array('Q')})
+        ))
         # pid -> [processes]
         self.processes = collections.defaultdict(list)
         self.threads = {}
@@ -439,8 +441,10 @@ def _record_func_end(record, ctx):
             if prev_entry:
                 stack[-1]['callee_time'] += record['timestamp'] - prev_entry
                 stack[-1]['callee_tmp'] = 0
+            amount_records = ctx.funcs[resource['tid']][stack[-1]['id']][resource['uid']]
         except IndexError:
-            pass
+            # E.g., main function might not have any caller
+            amount_records = ctx.funcs[resource['tid']]['!root!'][resource['uid']]
         resource['exclusive'] = resource['amount'] - matching_record['callee_time']
         ctx.level_times_exclusive[record_tid][thread_ctx.depth] += resource['exclusive']
         # Compute the bottom time
@@ -448,10 +452,10 @@ def _record_func_end(record, ctx):
             ctx.bottom[record_tid][record['id']] += resource['amount']
         thread_ctx.bottom_flag = False
         thread_ctx.depth -= depth_diff
-        func = ctx.funcs[resource['tid']][resource['uid']]
-        func['e'].append(abs(resource['exclusive']))
-        func['i'].append(abs(resource['amount']))
-
+        # Store the inclusive and exclusive times
+        amount_records['e'].append(abs(resource['exclusive']))
+        amount_records['i'].append(abs(resource['amount']))
+        amount_records['o'].append(abs(resource['call-order']))
     return resource
 
 

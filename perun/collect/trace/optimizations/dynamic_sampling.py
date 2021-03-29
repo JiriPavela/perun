@@ -24,14 +24,15 @@ def set_sampling(call_graph, stats, step, threshold):
     :param dict stats: the Dynamic Stats dictionary
     :param float step: the base for the exponential function that estimates sampling
     :param int threshold: the desired number of records for each profiled function
+
+    :return set: a set of functions that are removed by the method
     """
     stats = {} if stats is None else stats
     # 20% of the threshold is an expected deviation (+- 10%)
     threshold_eps = threshold * _THRESHOLD_EPS_RATIO
 
     if threshold == 0:
-        call_graph.remove_or_filter(set(call_graph.cg_map.keys()) - {'main'})
-        return
+        return set(call_graph.cg_map.keys()) - {'main'}
 
     for depth, level in enumerate(call_graph.levels):
         for func in level:
@@ -58,3 +59,4 @@ def set_sampling(call_graph, stats, step, threshold):
             if func_sample > _SAMPLE_MAX:
                 func_sample = _SAMPLE_MAX
             cg_func['sample'] = func_sample
+    return set()

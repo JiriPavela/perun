@@ -19,10 +19,12 @@ def complexity_filter(call_graph, sources, complexity, keep_top):
     :param list sources: the source files of the project
     :param Complexity complexity: complexity threshold for functions to be excluded from profiling
     :param int keep_top: protected top CG levels
+
+    :return set: a set of functions that are removed by the method
     """
     bounds_map = _get_complexity_classes(sources)
     if bounds_map:
-        _call_graph_filter(call_graph, bounds_map, complexity, keep_top)
+        return _call_graph_filter(call_graph, bounds_map, complexity, keep_top)
 
 
 def _get_complexity_classes(sources):
@@ -69,6 +71,8 @@ def _call_graph_filter(call_graph, bounds_map, complexity, keep_top):
     :param dict bounds_map: a dictionary containing the parsed results of bounds collector
     :param Complexity complexity: complexity threshold for functions to be excluded from profiling
     :param int keep_top: protected top CG levels
+
+    :return set: a set of functions that are removed by the method
     """
     filter_list = []
     # Assign complexity to all CG functions, if we failed to infer one, use the default
@@ -79,4 +83,4 @@ def _call_graph_filter(call_graph, bounds_map, complexity, keep_top):
             # Filter functions that are below the threshold
             if func_complexity <= complexity:
                 filter_list.append(func)
-    call_graph.remove_or_filter(filter_list)
+    return set(filter_list)
