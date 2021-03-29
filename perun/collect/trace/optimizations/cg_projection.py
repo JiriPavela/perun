@@ -15,6 +15,8 @@ def cg_top_down(call_graph, chain_length, keep_leaf):
     :param CallGraphResource call_graph: the CGR optimization resource
     :param int chain_length: the number of top CG levels to keep
     :param bool keep_leaf: if set to True, leaf functions will be kept during the trimming
+
+    :return set: a set of functions that are removed by the method
     """
     def _check_for_leaf(candidate_func):
         """ Function that checks whether a function should be filtered or not based on the
@@ -39,7 +41,7 @@ def cg_top_down(call_graph, chain_length, keep_leaf):
             trim_funcs |= set(trim)
             keep_funcs |= set(keep)
 
-    call_graph.remove_or_filter(trim_funcs - {'main'}, set_filtered=True)
+    return trim_funcs - {'main'}
 
 
 def cg_bottom_up(call_graph, chain_length):
@@ -50,16 +52,17 @@ def cg_bottom_up(call_graph, chain_length):
 
     :param CallGraphResource call_graph: the CGR optimization resource
     :param int chain_length: the path length to traverse
+
+    :return set: a set of functions that are removed by the method
     """
     # Check that the parameter is valid
     if chain_length == 0:
-        call_graph.remove_or_filter(set(call_graph.cg_map.keys() - {'main'}), set_filtered=True)
-        return
+        return set(call_graph.cg_map.keys() - {'main'})
     # Compute the set of the bottom functions
     call_graph.compute_bottom()
     visited = cg_bottom_sets(call_graph, chain_length)[0]
     # Remove functions that were not added into the set
-    call_graph.remove_or_filter(set(call_graph.cg_map.keys()) - visited, set_filtered=True)
+    return set(call_graph.cg_map.keys()) - visited
 
 
 def cg_bottom_sets(call_graph, chain_length=None):
