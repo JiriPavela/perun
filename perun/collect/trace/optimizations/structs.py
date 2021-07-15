@@ -119,6 +119,7 @@ class Parameters(Enum):
     CG_PROJ_KEEP_LEAF = 'cg-proj-keep-leaf'
     DYNSAMPLE_STEP = 'dyn-sample-step'
     DYNSAMPLE_THRESHOLD = 'dyn-sample-threshold'
+    DYNSAMPLE_MODE = 'dyn-sample-mode'
     PROBING_THRESHOLD = 'probing-threshold'
     PROBING_REATTACH = 'probing-reattach'
     TIMEDSAMPLE_FREQ = 'timed-sample-freq'
@@ -150,6 +151,22 @@ class DiffCfgMode(Enum):
         :return list: CLI names of the supported modes
         """
         return [mode.value for mode in DiffCfgMode]
+
+
+class DynSampleMode(Enum):
+    """ Enumeration of the currently supported Dynamic Sampling modes
+    The modes refer to pre-fabricated estimation functions
+    """
+    EXP = 'exp'
+    LOG = 'log'
+
+    @staticmethod
+    def supported():
+        """ List the currently supported Dynamic Sampling initial phase modes.
+
+        :return list: CLI names of the supported modes
+        """
+        return [mode.value for mode in DynSampleMode]
 
 
 class CGShapingMode(Enum):
@@ -324,6 +341,10 @@ class ParametersManager:
             Parameters.DYNSAMPLE_THRESHOLD: {
                 'value': self._threshold_soft_base,
                 'validate': self._validate_uint
+            },
+            Parameters.DYNSAMPLE_MODE: {
+                'value': DynSampleMode.EXP,
+                'validate': partial(self._validate_enum, DynSampleMode)
             },
             Parameters.PROBING_THRESHOLD: {
                 'value': self._probing_threshold,

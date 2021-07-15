@@ -8,7 +8,7 @@ records and to keep sufficient amount of data records for any further post-proce
 """
 
 import math
-from perun.collect.trace.optimizations.structs import Complexity
+from perun.collect.trace.optimizations.structs import DynSampleMode
 
 
 _SAMPLE_MAX = 2000000000     # Due to the type limitation of collection programs
@@ -17,13 +17,14 @@ _CONSTANT_RATIO = 2          # The ratio applied to constant functions in the in
 _LINEAR_RATIO = 1.5          # The ratio applied to linear functions in the initial phase
 
 
-def set_sampling(call_graph, stats, step, threshold):
+def set_sampling(call_graph, stats, step, threshold, mode):
     """ The Dynamic Sampling method.
 
     :param CallGraphResource call_graph: the CGR optimization resource
     :param dict stats: the Dynamic Stats dictionary
     :param float step: the base for the exponential function that estimates sampling
     :param int threshold: the desired number of records for each profiled function
+    :param DynSampleMode mode: the initial estimation mode
     """
     stats = {} if stats is None else stats
     # 20% of the threshold is an expected deviation (+- 10%)
@@ -37,7 +38,7 @@ def set_sampling(call_graph, stats, step, threshold):
         for func in level:
             cg_func = call_graph[func]
             # Default sampling according to the level
-            func_sample = round(step**depth)
+            func_sample = _MODE_MAP[mode](step, depth)
             if func in stats:
                 func_calls = stats[func]['sampled_count']
                 func_sample = stats[func]['sample']
@@ -49,12 +50,29 @@ def set_sampling(call_graph, stats, step, threshold):
                     func_sample = math.floor(func_sample / (threshold / func_calls))
                     # Normalize the value
                     func_sample = 1 if func_sample < 1 else func_sample
-            else:
-                if cg_func['complexity'] == Complexity.CONSTANT.value:
-                    func_sample *= _CONSTANT_RATIO
-                elif cg_func['complexity'] == Complexity.LINEAR.value:
-                    func_sample *= _LINEAR_RATIO
+            # else:
+            #     if cg_func['complexity'] == Complexity.CONSTANT.value:
+            #         func_sample *= _CONSTANT_RATIO
+            #     elif cg_func['complexity'] == Complexity.LINEAR.value:
+            #         func_sample *= _LINEAR_RATIO
             # Normalize the sampling
             if func_sample > _SAMPLE_MAX:
                 func_sample = _SAMPLE_MAX
             cg_func['sample'] = func_sample
+
+
+def _exp_estimate(step, depth):
+    return int(step**depth)
+
+
+def _log_estimate(step, depth):
+    if depth == 0:
+        return 1
+    return int(step * math.log(depth))
+
+
+_MODE_MAP = {
+    DynSampleMode.EXP: _exp_estimate,
+    DynSampleMode.LOG: _log_estimate,
+}
+

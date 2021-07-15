@@ -271,7 +271,8 @@ class CollectOptimization:
             sampling.set_sampling(
                 self.call_graph, self.dynamic_stats.global_stats,
                 self.params[Parameters.DYNSAMPLE_STEP],
-                self.params[Parameters.DYNSAMPLE_THRESHOLD]
+                self.params[Parameters.DYNSAMPLE_THRESHOLD],
+                self.params[Parameters.DYNSAMPLE_MODE]
             )
 
         # Extract the remaining functions from the call graph - these should be probed
