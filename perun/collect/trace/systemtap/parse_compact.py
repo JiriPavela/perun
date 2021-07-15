@@ -196,7 +196,7 @@ def process_records(data_file, config, probes):
             'hotspot_coverage_abs': sum(val for val in bottom.values()),
             'hotspot_coverage_count': len(bottom.keys())
         } for tid, bottom in ctx.bottom.items()})
-        metrics.add_metric('trace_level_times_exclusive', dict(ctx.level_times_exclusive))
+        # metrics.add_metric('trace_level_times_exclusive', dict(ctx.level_times_exclusive))
         all_probes = set(probes.func.keys()) | set(probes.usdt.keys())
         metrics.add_metric('collected_probes', len(ctx.probes_hit & all_probes))
         config.stats_data = {
@@ -428,7 +428,7 @@ def _record_func_end(record, ctx):
         for idx, stack_item in enumerate(reversed(stack)):
             if record['id'] == stack_item['id'] and record['timestamp'] > stack_item['timestamp']:
                 depth_diff = idx
-                stack[:] = stack[:len(stack) - idx]
+                del stack[-idx:]
                 matching_record = stack.pop()
                 break
     if matching_record:
