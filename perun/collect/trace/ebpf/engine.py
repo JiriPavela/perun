@@ -145,7 +145,7 @@ class BpfEngine(engine.CollectEngine):
         """
         WATCH_DOG.info('Cleaning up the eBPF-related resources.')
         # Terminate the eBPF process if it is still running
-        self._terminate_process('ebpf_process')
+        self._terminate_sudo_process('ebpf_process')
 
         # Zip and delete (both optional) the temporary collect files
         self._finalize_collect_files(

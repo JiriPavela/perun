@@ -2,14 +2,21 @@
 multiple other modules across the whole trace collector.
 """
 
+import os
+import grp
 import re
 import collections
 import shutil
 from enum import IntEnum, Enum
 from zipfile import ZipFile, ZIP_LZMA
 
+from typing import AbstractSet
+
 from perun.collect.trace.watchdog import WATCH_DOG
 from perun.utils.exceptions import MissingDependencyException
+
+
+
 
 
 class Strategy(Enum):
@@ -144,6 +151,19 @@ def check(dependencies):
             WATCH_DOG.debug("Missing dependency command '{}' detected".format(dependency))
             raise MissingDependencyException(dependency)
     WATCH_DOG.debug("Dependencies check successfully completed, no missing dependency")
+
+
+def check_user_in(groups: AbstractSet[str]) -> None:
+    # Get all group names of the script user and check that the required groups are there
+    WATCH_DOG.debug("Checking that user is in '{}' groups".format(groups))
+    groups_ok = groups & set(grp.getgrgid(group).gr_name for group in os.getgroups())
+    if groups_ok != groups:
+        WATCH_DOG.warn(
+            f"The user is not in the required groups: {groups - groups_ok}. "
+            f"It is highly recommended to be in the required groups."
+        )
+    else:
+        WATCH_DOG.debug("The user is in all required groups.")
 
 
 # The trace record template

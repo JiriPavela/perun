@@ -10,7 +10,7 @@ import perun.collect.trace.collect_engine as engine
 import perun.collect.trace.systemtap.script_compact as stap_script_compact
 from perun.collect.trace.watchdog import WATCH_DOG
 from perun.collect.trace.threads import PeriodicThread, NonBlockingTee, TimeoutThread
-from perun.collect.trace.values import FileSize, OutputHandling, check, RecordType, \
+from perun.collect.trace.values import FileSize, OutputHandling, check, check_user_in, RecordType, \
     LOG_WAIT, HARD_TIMEOUT, CLEANUP_TIMEOUT, CLEANUP_REFRESH, HEARTBEAT_INTERVAL, \
     STAP_MODULE_REGEX, PS_FORMAT, STAP_PHASES
 
@@ -54,6 +54,7 @@ class SystemTapEngine(engine.CollectEngine):
 
         # SystemTap specific dependencies
         self.__dependencies = ['stap', 'lsmod', 'rmmod']
+        self.__groups = {'stapusr', 'stapdev'}
 
         # Locks
         binary_name = os.path.basename(self.executable.cmd)
@@ -79,6 +80,7 @@ class SystemTapEngine(engine.CollectEngine):
         """ Check that the SystemTap related dependencies are available.
         """
         check(self.__dependencies)
+        check_user_in(self.__groups)
 
     def available_usdt(self, **_):
         """Extract USDT probe locations from the supplied binary files and libraries.
@@ -112,7 +114,7 @@ class SystemTapEngine(engine.CollectEngine):
         # Open the log file for collection
         with open(self.log, 'w') as logfile:
             # Assemble the SystemTap command and log it
-            stap_cmd = ('sudo stap -g --suppress-time-limits -s5 -v {} -o {}'
+            stap_cmd = ('stap -g --suppress-time-limits -s5 -v {} -o {}'
                         .format(self.script, self.data))
             compile_cmd = stap_cmd
             if config.stap_cache_off:
@@ -174,12 +176,9 @@ class SystemTapEngine(engine.CollectEngine):
         self.lock_stap.lock()
 
         # Run the compilation process
-        # Fetch the password so that the preexec_fn doesn't halt
-        utils.run_safely_external_command('sudo sleep 0')
         # Run only the first 4 phases of the stap command, before actually running the collection
         with utils.nonblocking_subprocess(
-                command + ' -p 4', {'stderr': logfile, 'stdout': PIPE, 'preexec_fn': os.setpgrp},
-                self._terminate_process, {'proc_name': 'stap_compile'}
+                command + ' -p 4', {'stderr': logfile, 'stdout': PIPE, 'preexec_fn': os.setpgrp}
         ) as compilation_process:
             # Store the compilation process object and wait for the compilation to finish
             self.stap_compile = compilation_process
@@ -232,8 +231,7 @@ class SystemTapEngine(engine.CollectEngine):
         """
         WATCH_DOG.info('Starting up the SystemTap collection process.')
         with utils.nonblocking_subprocess(
-                command, {'stderr': logfile, 'preexec_fn': os.setpgrp},
-                self._terminate_process, {'proc_name': 'stap_collect'}
+                command, {'stderr': logfile, 'preexec_fn': os.setpgrp}
         ) as collect_process:
             self.stap_collect = collect_process
             WATCH_DOG.debug("Collection process: '{}'".format(collect_process.pid))
@@ -290,8 +288,7 @@ class SystemTapEngine(engine.CollectEngine):
         )
 
         with utils.nonblocking_subprocess(
-                self.executable.to_escaped_string(), profiled_args,
-                self._terminate_process, {'proc_name': 'profiled_command'}
+                self.executable.to_escaped_string(), profiled_args
         ) as profiled:
             metrics.start_timer('command_time')
             # Store the command process
@@ -323,12 +320,15 @@ class SystemTapEngine(engine.CollectEngine):
 
         Releases the resource locks for SystemTap and Binary.
         """
+        # TODO: the profiled command can be run with sudo, handle this
         procs = [self.stap_compile, self.stap_collect, self.profiled_command]
         proc_names = ['stap_compile', 'stap_collect', 'profiled_command']
         try:
             # Terminate the known spawned processes
-            for proc_name in proc_names:
-                self._terminate_process(proc_name)
+            for proc in procs:
+                if proc is not None:
+                    proc.terminate()
+                    proc.wait()
 
             # Fetch all processes that are still running and their PPID is tied to either the
             # perun process itself or to the known spawned processes
@@ -352,8 +352,12 @@ class SystemTapEngine(engine.CollectEngine):
                 setattr(self, proc_name, None)
 
     def _cleanup_kernel_module(self):
-        """ Unloads the SystemTap kernel module from the system and releases the resource lock.
+        """ Check if the systemtap kernel module is still loaded and if so, warn the user.
+
+        Previously, we also tried to unload the module, however, it requires root privileges
+        which complicates it.
         """
+        # TODO: add configuration for available sudo support that allows to remove modules
         try:
             # We might have acquired the module name but the collect process might not have started
             if self.stap_module is None or self.stapio is None:
@@ -361,10 +365,9 @@ class SystemTapEngine(engine.CollectEngine):
 
             # Form the module name which consists of the base module name and stapio PID
             module_name = '{}__{}'.format(self.stap_module, self.stapio)
-            # Attempts to unload the module
-            utils.run_safely_external_command('sudo rmmod {}'.format(module_name), False)
-            if not _wait_for_resource_release(_loaded_stap_kernel_modules, [module_name]):
-                WATCH_DOG.debug("Unloading the kernel module '{}' failed".format(module_name))
+            # Check if the systemtap kernel module is still present and if so, wait for its release
+            if not _wait_for_resource_release(_loaded_stap_kernel_modules, module_name):
+                WATCH_DOG.warn(f"Kernel module '{module_name}' was not automatically unloaded!.")
         finally:
             # Always unlock the module
             if self.lock_module is not None:
@@ -382,7 +385,7 @@ def _extract_usdt_probes(binary):
     :return str: the decoded standard output
     """
     out, _ = utils.run_safely_external_command(
-        'sudo stap -l \'process("{bin}").mark("*")\''.format(bin=binary), False)
+        'stap -l \'process("{bin}").mark("*")\''.format(bin=binary), False)
     return out.decode('utf-8')
 
 
@@ -588,7 +591,7 @@ def _loaded_stap_kernel_modules(module=None):
     return list(modules)
 
 
-def _wait_for_resource_release(check_function, function_args):
+def _wait_for_resource_release(check_function, *function_args):
     """ Waits for a resource to be released. The state of the resource is tested by the
     check function invoked with the function args.
 
@@ -647,7 +650,7 @@ def _check_used_resources(locks_dir):
     active_locks = get_active_locks_for(
         locks_dir, resource_types=[LockType.Module, LockType.SystemTap]
     )
-    processes = _extract_processes('ps -eo {} | awk \'$4" "$5 == "sudo stap"\''.format(PS_FORMAT))
+    processes = _extract_processes('ps -eo {} | awk \'$4" "$5 == "stap"\''.format(PS_FORMAT))
     modules = _loaded_stap_kernel_modules()
 
     # Partition the locks into Systemtap and module locks

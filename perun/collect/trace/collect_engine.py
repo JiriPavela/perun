@@ -154,7 +154,7 @@ class CollectEngine(ABC):
                     setattr(self, file_name, None)
             WATCH_DOG.end_session(temp_pack)
 
-    def _terminate_process(self, proc_name):
+    def _terminate_sudo_process(self, proc_name):
         """ Terminates the given subprocess (identified by the proc_name).
 
         The process has to terminated by a 'sudo kill' operation since it has been probably invoked

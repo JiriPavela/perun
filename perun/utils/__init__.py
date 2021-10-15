@@ -197,6 +197,7 @@ def nonblocking_subprocess(command, subprocess_kwargs, termination=None, termina
                 # Use the default termination if the termination handler is not set
                 if termination is None:
                     proc.terminate()
+                    proc.wait()
                 else:
                     # Otherwise use the supplied termination function
                     if termination_kwargs is None:
