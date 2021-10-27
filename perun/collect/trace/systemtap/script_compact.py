@@ -152,7 +152,7 @@ def assemble_system_tap_script(script_file, config, probes, **_):
         # Declare and init arrays, create the begin / end probes
         _add_script_init(script_handle, config, probes, timed_sampling)
         # Add the thread begin / end probes
-        _add_thread_probes(script_handle, config.binary, bool(probes.sampled_probes_len()))
+        _add_thread_probes(script_handle, config.project.binary, bool(probes.sampled_probes_len()))
         # Add the timed sampling timer probe if needed
         if timed_sampling:
             sampling_freq = config.run_optimization_parameters[Parameters.TIMEDSAMPLE_FREQ.value]
@@ -202,7 +202,7 @@ probe process("{binary}").end
         stopwatch=STOPWATCH_ON,
         id_init=_build_id_init(probes, config.verbose_trace),
         sampling_init=_build_sampling_init(probes),
-        binary=config.binary,
+        binary=config.project.binary,
         timestamp=STOPWATCH_NAME,
         begin_handler=PROCESS_HANDLER_TEMPLATE.format(
             type=int(RecordType.PROCESS_BEGIN), timestamp=STOPWATCH_NAME

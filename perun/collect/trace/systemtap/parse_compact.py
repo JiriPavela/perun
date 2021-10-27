@@ -174,8 +174,10 @@ def process_records(data_file, config, probes):
     :return iterable: generator object that produces dictionaries representing the resources
     """
     # Initialize the context
-    binaries = set(map(os.path.basename, config.libs + [config.binary]))
-    ctx = TransformContext(probes, binaries, config.verbose_trace, config.executable.workload)
+    binaries = set(map(os.path.basename, config.project.libs + [config.project.binary]))
+    ctx = TransformContext(
+        probes, binaries, config.verbose_trace, config.project.executable.workload
+    )
     # Get the handlers
     handlers = _record_handlers()
 
@@ -224,7 +226,7 @@ def _build_mixed_cg_tmp(config, ctx):
     cg_stats_name, _ = build_stats_names(config)
     static_cg = resources.extract(
         resources.Resources.CALL_GRAPH_ANGR, stats_name=cg_stats_name,
-        binary=config.get_target(), libs=config.libs,
+        binary=config.get_target(), libs=config.project.libs,
         cache=False, restricted_search=False
     )
     cg_map = {

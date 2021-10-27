@@ -1,11 +1,162 @@
 """ The Probes class stores the probe specification as well as several other related parameters.
 """
 
+from __future__ import annotations
+
 from enum import Enum
 
 from perun.collect.trace.values import Strategy, DEFAULT_SAMPLE
 from perun.utils.helpers import SuppressedExceptions
 from perun.utils import partition_list
+from perun.collect.trace.values import SUFFIX_DELIMITERS
+
+from typing import TYPE_CHECKING, Optional, Dict, List, Tuple, TypeVar
+
+if TYPE_CHECKING:
+    from perun.collect.trace.configuration import Configuration
+
+_Probe = TypeVar('_Probe', bound='Probe')
+ProbeMap = Dict[str, "Probe"]
+UsdtMap = Dict[str, "ProbeUsdt"]
+# class ProbesClassification:
+#     def __init__(self):
+#         self.func_user: List[Probe] = []
+#         self.usdt_user: List[ProbeUsdt] = []
+#
+#         self.func_sampled: List[Probe] = []
+#         self.func_unsampled: List[Probe] = []
+#         self.usdt_paired_sampled: List[ProbeUsdt] = []
+#         self.usdt_paired_unsampled: List[ProbeUsdt] = []
+#         self.usdt_single_sampled: List[ProbeUsdt] = []
+#         self.usdt_single_unsampled: List[ProbeUsdt] = []
+#
+#     def classify_func(self, probe: Probe, user_defined: bool = False) -> None:
+#         if user_defined:
+#             self.func_user.append(probe)
+#
+#         if probe.is_sampled():
+#             self.func_sampled.append(probe)
+#         else:
+#             self.func_unsampled.append(probe)
+#
+#     def classify_usdt(self, probe: ProbeUsdt, user_defined: bool = False) -> None:
+#         if user_defined:
+#             self.usdt_user.append(probe)
+#
+#         cls: List[ProbeUsdt] = self.usdt_single_unsampled
+#         if probe.is_sampled() and probe.is_paired():
+#             cls = self.usdt_paired_sampled
+#         elif probe.is_sampled() and not probe.is_paired():
+#             cls = self.usdt_single_sampled
+#         elif not probe.is_sampled() and probe.is_paired():
+#             cls = self.usdt_paired_unsampled
+#         cls.append(probe)
+#
+
+
+# TODO: continue here, check if USDT pairs are removed in order to handle ID generation
+# We do not complicate the inheritance, otherwise the number of classes might explode when
+# introducing additional types of probes
+class Probe:
+    __slots__ = 'id', 'name', 'binary', 'sample', 'user_defined', 'sample_id'
+
+    def __init__(self, name: str, binary: str, sample: int = 1, user_defined: bool = False) -> None:
+        self.name: str = name
+        self.binary: str = binary
+        self.sample: int = sample
+        self.user_defined: bool = user_defined
+
+    def is_sampled(self) -> bool:
+        return False if self.sample == 1 else True
+
+    def is_paired(self) -> bool:
+        return False
+
+
+class ProbeUsdt(Probe):
+    __slots__ = 'pair'
+
+    def __init__(
+            self, name: str, binary: str, sample: int = 1,
+            user_defined: bool = False, pair: Optional[ProbeUsdt] = None
+    ):
+        super().__init__(name, binary, sample, user_defined)
+        self.pair: Optional[ProbeUsdt] = pair
+
+    def set_pair(self, probe: ProbeUsdt) -> None:
+        # Do not set the pair if one of the probes is already paired
+        if self.is_paired() or probe.is_paired():
+            return
+        self.pair = probe
+        probe.pair = self
+        # Unify the sampling value, it has to be the same
+        self.sample = min(self.sample, probe.sample)
+        probe.sample = self.sample
+
+    def is_paired(self) -> bool:
+        return False if self.pair is None else True
+
+
+class Probes2:
+    def __init__(self, config: Configuration) -> None:
+        self.config: Configuration = config
+        self.global_sampling = 1
+        self.with_usdt = False
+
+        # Name -> Probe
+        # TODO: handle same names in different binaries
+        self.func: ProbeMap = {}
+        self.usdt: UsdtMap = {}
+
+    # TODO: add checking here for user-defined probes
+    def add_probe(self, probe: _Probe) -> None:
+        if type(probe) is Probe:
+            self.func[probe.name] = probe
+        elif type(probe) is ProbeUsdt:
+            self.usdt[probe.name] = probe
+        else:
+            raise NotImplementedError("Invalid Probe (sub)class.")
+
+    def obtain_probes(self, **cli_config) -> None:
+        # Obtain probes from strategy
+        self._parse_user_probes(**cli_config)
+
+    def _parse_user_probes(self, **cli_config) -> None:
+        for func in list(cli_config.get('func', '')):
+            self.add_probe(Probe(*self._parse_string(func), user_defined=True))
+        for usdt in list(cli_config.get('usdt', '')):
+            parts = usdt.split(';')
+            # Ignore cases where more than 2 USDT probes are given in a pair
+            if parts == 1 or (parts == 2 and parts[0] == parts[1]):
+                self.add_probe(ProbeUsdt(*self._parse_string(usdt), user_defined=True))
+            elif parts == 2:
+                first = ProbeUsdt(*self._parse_string(parts[0]), user_defined=True)
+                second = ProbeUsdt(*self._parse_string(parts[1]), user_defined=True, pair=first)
+                self.add_probe(first)
+                self.add_probe(second)
+
+    def _parse_string(self, probe: str) -> Tuple[str, str, int]:
+        parts = probe.split('#')
+        name, lib, sample = '', self.config.project.binary, self.global_sampling
+        # Only the probe name was given
+        if len(parts) == 1:
+            name = parts[0]
+        # The possible combinations are <lib>#<name> or <name>#<sample>
+        elif len(parts) == 2:
+            try:
+                sample = int(parts[1])
+                name = parts[0]
+            except ValueError:
+                lib = parts[0]
+                name = parts[1]
+        # A full specification <lib>#<name>#<sample> was given
+        elif len(parts) == 3:
+            lib = parts[0]
+            name = parts[1]
+            # Attempt to convert the sample to int, keep the default global_sampling if it fails
+            with SuppressedExceptions(ValueError):
+                sample = int(parts[2])
+        return name, lib, sample
 
 
 # TODO: change the API of probe retrieval to something universal and practical

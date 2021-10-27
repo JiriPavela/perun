@@ -38,10 +38,11 @@ class CollectEngine(ABC):
         :param Configuration config: the configuration object
         """
         super().__init__()
-        self.binary = config.binary
-        self.libs = config.libs
+        self.binary = config.project.binary
+        # TODO: useless, access project.libs instead
+        self.libs = config.project.libs
         self.targets = [self.binary] + self.libs
-        self.executable = config.executable
+        self.project = config.project
         self.timestamp = config.timestamp
         self.pid = config.pid
         self.files_dir = config.files_dir

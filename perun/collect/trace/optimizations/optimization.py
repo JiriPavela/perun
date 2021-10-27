@@ -118,14 +118,14 @@ class CollectOptimization:
 
         :param Configuration config: the collection configuration object
         """
-        if self.pipeline and config.executable.workload == self.current_workload:
+        if self.pipeline and config.project.executable.workload == self.current_workload:
             return
 
         if self.current_workload is None:
-            self.current_workload = config.executable.workload
+            self.current_workload = config.project.executable.workload
         # Workloads can change when e.g., workload generators are used
-        if config.executable.workload != self.current_workload:
-            self.current_workload = config.executable.workload
+        if config.project.executable.workload != self.current_workload:
+            self.current_workload = config.project.executable.workload
             # We need to update the dynamic stats file
             self.cg_stats_name, self.dynamic_stats_name = build_stats_names(
                 config, self.call_graph_type
@@ -176,7 +176,7 @@ class CollectOptimization:
             # Extract call graph of the profiled binary
             _cg = resources.extract(
                 resources.Resources.CALL_GRAPH_ANGR, stats_name=self.cg_stats_name,
-                binary=config.get_target(), libs=config.libs,
+                binary=config.get_target(), libs=config.project.libs,
                 cache=self.resource_cache and not self.reset_cache,
             )
             # Based on the cache we might have obtained the cached call graph or extracted a new one
@@ -616,10 +616,12 @@ def build_stats_names(config, cg_type=CallGraphTypes.STATIC):
 
     :return tuple (str, str): CG stats name, Dynamic Stats name
     """
-    binaries = sanitize_filepart('--'.join([config.binary] + sorted(config.libs))).replace('.', '_')
-    binaries_param = sanitize_filepart(
-        '--'.join([arg for arg in [config.executable.args, config.executable.workload] if arg])
+    binaries = sanitize_filepart(
+        '--'.join([config.project.binary] + sorted(config.project.libs))
     ).replace('.', '_')
+    binaries_param = sanitize_filepart('--'.join(
+        [arg for arg in [config.project.executable.args, config.project.executable.workload] if arg]
+    )).replace('.', '_')
     cg_prefix = 'cg'
     if cg_type == CallGraphTypes.DYNAMIC:
         cg_prefix= 'dcg'

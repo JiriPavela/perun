@@ -116,7 +116,7 @@ class BpfEngine(engine.CollectEngine):
             'sample': 1,
             'seq': 0
         }
-        workload = config.executable.workload
+        workload = config.project.executable.workload
 
         with open(self.data, 'r') as raw_data:
             for line in raw_data:
@@ -164,8 +164,8 @@ class BpfEngine(engine.CollectEngine):
                 'func': probes.func,
                 'program_file': self.program,
                 'data_file': self.data,
-                'binary': config.binary,
-                'command': config.executable.to_escaped_string(),
+                'binary': config.project.binary,
+                'command': config.project.executable.to_escaped_string(),
                 'timeout': config.timeout,
                 'optimizations': config.run_optimizations,
                 'optimization_params': config.run_optimization_parameters

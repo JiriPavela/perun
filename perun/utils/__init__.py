@@ -129,17 +129,17 @@ def get_project_elf_executables(root='.', only_not_stripped=False):
     return binaries
 
 
-def find_executable(cmd):
+def find_executable(cmd: str) -> str:
     """ Check if the supplied cmd is executable and find its real path
     (i.e. absolute path with resolved symlinks)
 
-    :param str cmd: the command to check
+    :param cmd: the command to check
 
-    :return str: resolved command path
+    :return: resolved command path as a realpath or empty string
     """
     # Ignore invalid paths
-    if cmd is None:
-        return None
+    if not cmd:
+        return cmd
 
     # shutil.which checks:
     # 1) files with relative / absolute paths specified
@@ -147,7 +147,7 @@ def find_executable(cmd):
     # 3) that the file is indeed accessible and executable
     cmd = shutil.which(cmd)
     if cmd is None:
-        return None
+        return ''
     # However, we still want to resolve the real path of the file
     return os.path.realpath(cmd)
 

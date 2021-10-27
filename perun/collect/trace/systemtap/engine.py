@@ -284,11 +284,11 @@ class SystemTapEngine(engine.CollectEngine):
 
         # Start the profiled command
         WATCH_DOG.info(
-            "Launching the profiled command '{}'".format(self.executable.to_escaped_string())
+            "Launching the profiled command '{}'".format(self.project.executable.to_escaped_string())
         )
 
         with utils.nonblocking_subprocess(
-                self.executable.to_escaped_string(), profiled_args
+                self.project.executable.to_escaped_string(), profiled_args
         ) as profiled:
             metrics.start_timer('command_time')
             # Store the command process

@@ -9,6 +9,7 @@ from perun.collect.trace.collect_engine import CollectEngine
 from perun.collect.trace.systemtap.engine import SystemTapEngine
 from perun.collect.trace.probes import Probes
 from perun.collect.trace.values import OutputHandling
+from perun.collect.trace.watchdog import WATCH_DOG
 
 from perun.utils.exceptions import InvalidBinaryException
 from perun.utils import find_executable
@@ -17,6 +18,54 @@ import perun.logic.temp as temp
 # Import on demand since eBPF support is optional
 with demandimport.enabled():
     import perun.collect.trace.ebpf.engine as bpf
+
+from typing import TYPE_CHECKING, Any, List
+
+
+if TYPE_CHECKING:
+    from perun.utils.structs import Executable
+
+
+class ProfiledProject:
+    __slots__ = 'executable', 'binary', 'libs'
+
+    def __init__(self, executable: Executable, **cli_config: Any):
+        self.executable: Executable = executable
+        self.executable.cmd = find_executable(self.executable.cmd)
+        self.binary: str = find_executable(cli_config.get('binary', ''))
+        self.libs: List[str] = list(cli_config.get('libs', ''))
+        # Update the cmd, binary and libs attributes
+        self._resolve_executables()
+        self._resolve_libraries()
+
+    def _resolve_executables(self) -> None:
+        """ Check that the supplied executables (command and binary)
+        are accessible and executable, and obtain their real paths (absolute and no symlinks).
+        """
+        # No runnable command was given, terminate the collection
+        if not self.binary and not self.executable.cmd:
+            raise InvalidBinaryException('')
+        # Otherwise copy the cmd or binary parameter
+        if not self.executable.cmd:
+            self.executable.cmd = self.binary
+        elif not self.binary:
+            self.binary = self.executable.cmd
+
+    def _resolve_libraries(self) -> None:
+        """ Check the supplied libraries are accessible and executable. Resolve their real path.
+        """
+        # Check that all of the supplied libraries exist and are executable
+        resolved_libs = []
+        for lib_name in self.libs:
+            lib = find_executable(lib_name)
+            # Warn the user if the library could not be resolved
+            if lib:
+                resolved_libs.append(lib)
+            else:
+                WATCH_DOG.warn(
+                    f"Supplied library '{lib_name}' was not found or is not an executable file."
+                )
+        self.libs = resolved_libs
 
 
 class Configuration:
@@ -91,11 +140,7 @@ class Configuration:
             self.timeout = None
 
         # Set the executable and binary
-        self.binary = find_executable(cli_config.get('binary', None))
-        self.executable = executable
-        self.executable.cmd = find_executable(self.executable.cmd)
-        self.libs = list(cli_config.get('libs', ''))
-        self._resolve_executables()
+        self.project: ProfiledProject = ProfiledProject(executable, **cli_config)
 
         # Update the configuration with some additional values
         self.timestamp = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
@@ -104,7 +149,7 @@ class Configuration:
         self.locks_dir = temp.temp_path(os.path.join('trace', 'locks'))
 
         # Build the probes configuration
-        self.probes = Probes(self.binary, self.libs, **cli_config)
+        self.probes = Probes(self.project.binary, self.project.libs, **cli_config)
         self.stats_data = {}
 
     def engine_factory(self):
@@ -152,25 +197,4 @@ class Configuration:
 
         :return str: a path to the binary executable file
         """
-        return self.binary
-
-    def _resolve_executables(self):
-        """ Check that all of the supplied executables (command, binary, libraries)
-        are accessible and executable, and obtain their real paths (absolute and no symlinks)
-        """
-        # No runnable command was given, terminate the collection
-        if self.binary is None and not self.executable.cmd:
-            raise InvalidBinaryException('')
-        # Otherwise copy the cmd or binary parameter
-        if not self.executable.cmd:
-            self.executable.cmd = self.binary
-        elif self.binary is None:
-            self.binary = self.executable.cmd
-
-        # Check that all of the supplied libraries exist and are executable
-        resolved_libs = []
-        for lib in self.libs:
-            lib = find_executable(lib)
-            if lib is not None:
-                resolved_libs.append(lib)
-        self.libs = resolved_libs
+        return self.project.binary
