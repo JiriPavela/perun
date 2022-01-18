@@ -368,7 +368,7 @@ def get_supported_module_names(package):
         ))
     return {
         'vcs': ['git'],
-        'collect': ['trace', 'memory', 'time', 'complexity', 'bounds'],
+        'collect': ['trace', 'memory', 'time', 'complexity', 'bounds', 'inferbounds'],
         'postprocess': ['clusterizer', 'normalizer', 'regression-analysis',
                         'regressogram', 'moving-average', 'kernel-regression'],
         'view': ['bars', 'flamegraph', 'flow', 'heapmap', 'raw', 'scatter', 'tableof']

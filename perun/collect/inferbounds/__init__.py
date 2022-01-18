@@ -1,0 +1,12 @@
+"""TODO: Write short docstring of the new collector
+
+TODO: Write long docstring of the new collector
+"""
+
+COLLECTOR_TYPE = ""
+COLLECTOR_DEFAULT_UNITS = {
+    "TODO: add type": "TODO: add type unit"
+}
+
+
+__author__ = 'None'
