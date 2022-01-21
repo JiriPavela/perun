@@ -568,11 +568,11 @@ class CollectOptimization:
         :return set: set of function names that should be filtered
         """
         if not arbiter_enabled or self.filter_arbiter['counter'] <= 1:
-            return set(self.filter_arbiter['funcs'].keys())
+            return set(self.filter_arbiter['funcs'].keys()) - {'main'}
         else:
             return {
                 f_name for f_name, f_count in self.filter_arbiter['funcs'].items() if f_count >= 2
-            }
+            } - {'main'}
 
 
 # Create the Optimization object so that all the affected modules can use it

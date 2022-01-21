@@ -1,0 +1,45 @@
+[939848][      debug] Loading models took 61.327ms
+[939849][      debug] Sqlite write daemon: starting up
+[939849][      debug] Sqlite write daemon: set up complete, waiting for connections
+[939848][environment] CWD = /home1/all/perun/perun/collect/inferbounds
+[939848][environment] No .inferconfig file found
+[939848][environment] Project root = /home1/all/perun/perun/collect/inferbounds
+[939848][environment] INFER_ARGS =   
+[939848][environment] command line arguments:   infer
+[939848][environment] Available memory at startup: 29836 MB
+[939848][environment] Active checkers: self-in-block (C/C++/ObjC), starvation (C/C++/ObjC, Java), uninit (C/C++/ObjC), siof (C/C++/ObjC), dotnet-resource-leak (C#/.Net), racerd (C/C++/ObjC, Java), liveness (C/C++/ObjC), inefficient-keyset-iterator (Java), fragment-retains-view (Java), biabduction (C/C++/ObjC, Java, C#/.Net)
+[939848][environment] Scheduler: file
+[939848][environment] Cores used: 4
+[939848][environment] Infer version v1.1.0
+[939848][environment] Copyright 2009 - present Facebook. All Rights Reserved.
+[939848][environment] 
+[939848][      debug] GC stats for capture:
+[939848][      debug]   minor_words: 50
+[939848][      debug]   promoted_words: 0
+[939848][      debug]   major_words: 0
+[939848][      debug]   minor_collections: 0
+[939848][      debug]   major_collections: 0
+[939848][      debug]   compactions: 0
+[939848][      debug]   top_heap_words: 875008
+[939848][      debug]   
+[939848][  user warn] Nothing to compile. Have you run `infer capture`? Try cleaning the build first.
+[939848][   progress] There was nothing to analyze.
+[939848][      debug] GC stats for report:
+[939848][      debug]   minor_words: 2121
+[939848][      debug]   promoted_words: 0
+[939848][      debug]   major_words: 0
+[939848][      debug]   minor_collections: 0
+[939848][      debug]   major_collections: 0
+[939848][      debug]   compactions: 0
+[939848][      debug]   top_heap_words: 875008
+[939848][      debug]   
+[939848][      debug] GC stats for main_process_full:
+[939848][      debug]   minor_words: 1.69092e+06
+[939848][      debug]   promoted_words: 331106
+[939848][      debug]   major_words: 857147
+[939848][      debug]   minor_collections: 22
+[939848][      debug]   major_collections: 5
+[939848][      debug]   compactions: 1
+[939848][      debug]   top_heap_words: 875008
+[939848][      debug]   
+[939849][      debug] Sqlite write daemon: terminating
