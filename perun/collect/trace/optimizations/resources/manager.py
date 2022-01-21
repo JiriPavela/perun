@@ -10,6 +10,7 @@ from enum import Enum
 from perun.collect.trace.optimizations.resources import angr_provider
 import perun.collect.trace.optimizations.resources.perun_call_graph as perun_cg
 import perun.collect.trace.optimizations.resources.perun_dynamic_stats as perun_stats
+import perun.collect.trace.optimizations.resources.perun_complexities as perun_complexity
 
 
 class Resources(Enum):
@@ -18,6 +19,7 @@ class Resources(Enum):
     """
     CALL_GRAPH_ANGR = (angr_provider.extract,)
     PERUN_CALL_GRAPH = perun_cg.extract, perun_cg.store
+    COMPLEXITIES = perun_complexity.extract, perun_complexity.store
     PERUN_STATS = perun_stats.extract, perun_stats.store
 
 

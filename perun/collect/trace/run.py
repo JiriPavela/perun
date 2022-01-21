@@ -223,6 +223,10 @@ def teardown(**kwargs):
               help='DEBUG: Extract mixed CG.')
 @click.option('--only-extract-cg', '-cg', is_flag=True, default=False,
               help='Tracer will only extract the CG of the current project version and terminate.')
+@click.option('--only-extract-complexity', '-sb', is_flag=True, default=False,
+              help='Tracer will only extract the static complexities of the current project version and terminate.')
+@click.option('--make-command', 'm', default='make',
+              help='Make command for complexity extraction')
 @click.option('--max-simultaneous-threads', '-mt', type=int, default=5,
               help='DEBUG: Maximum number of expected simultaneous threads when sampling is on.')
 @click.option('--no-ds-update', '-nds', is_flag=True, default=False,

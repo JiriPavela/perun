@@ -66,6 +66,8 @@ class Configuration:
         self.generate_dynamic_cg = cli_config.get('generate_dynamic_cg', False)
         self.no_profile = cli_config.get('no_profile', False)
         self.cg_extraction = cli_config.get('only_extract_cg', False)
+        self.sb_extraction = cli_config.get('only_extract_complexity', False)
+        self.make_command = cli_config.get('make_command', 'make')
         # TODO: temporary
         self.maximum_threads = cli_config.get('max_simultaneous_threads', 5)
         self.extract_mcg = cli_config.get('extract_mixed_cg', False)

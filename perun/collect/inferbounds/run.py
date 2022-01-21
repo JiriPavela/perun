@@ -56,7 +56,7 @@ def collect(make_command, **kwargs):
             },
             'bound': cost['hum_polynomial'],
             'class': 'O(∞)' if cost['big_o'] == 'Top' else \
-            ('O(1)' if cost['hum_degree'] == 0 else "O(n^{})".format(cost['hum_degree'])),
+            ('O(1)' if cost['hum_degree'] == "0" else "O(n^{})".format(cost['hum_degree'])),
             'type': 'total bound'
         })
 

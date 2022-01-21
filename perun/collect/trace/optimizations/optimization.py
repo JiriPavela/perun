@@ -67,6 +67,7 @@ class CollectOptimization:
         self.call_graph_type = CallGraphTypes.STATIC
         self.call_graph = None
         self.call_graph_old = None
+        self.bounds_map = {}
         self.dynamic_stats = DynamicStats()
         self.filter_arbiter = {'counter': 0, 'funcs': {}}
 
@@ -146,7 +147,7 @@ class CollectOptimization:
                 self.pipeline.remove(optimization)
 
         # If no optimizations are selected, skip
-        if not self.pipeline and not config.cg_extraction:
+        if not self.pipeline and not (config.cg_extraction or config.sb_extraction):
             return
 
         # Otherwise prepare the necessary resources
@@ -172,7 +173,7 @@ class CollectOptimization:
             config, self.call_graph_type
         )
         # cg_stats_name = config.get_stats_name('call_graph')
-        if self.get_pre_optimizations() or config.cg_extraction:
+        if self.get_pre_optimizations() or config.cg_extraction or config.sb_extraction:
             # Extract call graph of the profiled binary
             _cg = resources.extract(
                 resources.Resources.CALL_GRAPH_ANGR, stats_name=self.cg_stats_name,
@@ -190,9 +191,22 @@ class CollectOptimization:
                 resources.Resources.PERUN_CALL_GRAPH, stats_name=self.cg_stats_name,
                 call_graph=self.call_graph, cache=self.resource_cache and not self.reset_cache
             )
+
+            self.bounds_map = resources.extract(
+                resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
+                make_command=config.make_command, cache=self.resource_cache and not self.reset_cache
+            )
+
+            resources.store(
+                resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
+                bounds_map=self.bounds_map, cache=self.resource_cache and not self.reset_cache
+            )
+
             # TODO: temporary
             if config.cg_extraction:
                 raise NotImplementedError('CG extracted OK')
+            elif config.sb_extraction:
+                raise NotImplementedError('SB extracted OK')
 
             # Get call graph of the same binary but from the previous project version (if it exists)
             if old_cg_version != self.call_graph.minor:
@@ -257,7 +271,7 @@ class CollectOptimization:
         if Optimizations.BASELINE_STATIC in optimizations:
             self._add_filtered(sbase.complexity_filter(
                 self.call_graph,
-                self.params[Parameters.SOURCE_FILES],
+                self.bounds_map,
                 self.params[Parameters.STATIC_COMPLEXITY],
                 self.params[Parameters.STATIC_KEEP_TOP]
             ))
