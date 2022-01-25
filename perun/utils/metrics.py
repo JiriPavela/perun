@@ -126,7 +126,7 @@ def save():
         stored_metrics = {}
         # Update the metrics file
         if temp.exists_temp_file(Metrics.metrics_filename):
-            stored_metrics = temp.read_temp(Metrics.metrics_filename)
+            stored_metrics = temp.read_temp(Metrics.metrics_filename, json_override=True)
         stored_metrics.update(Metrics.records)
         temp.store_temp(Metrics.metrics_filename, stored_metrics, json_format=True)
 

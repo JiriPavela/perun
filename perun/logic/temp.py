@@ -253,7 +253,7 @@ def store_temp(file_path, content, json_format=False, protect=False, compress=Fa
     _write_to_temp(file_path, content, json_format, protect, compress)
 
 
-def read_temp(file_path):
+def read_temp(file_path, json_override = None):
     """Reads the content of the temporary file 'file_path'. An exception is raised if the file does
     not exist. None is returned if the file could not have been read, is corrupted, has
     inconsistent or invalid index properties.
@@ -268,6 +268,8 @@ def read_temp(file_path):
     file_path = temp_path(file_path)
     _is_tmp_file(file_path)
     json_format, _, compressed = _get_index_entry(file_path)
+    if json_override is not None:
+        json_format = json_override
     try:
         with open(file_path, 'rb' if compressed else 'r') as tmp_handle:
             # Take care of possible compression
