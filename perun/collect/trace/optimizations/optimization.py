@@ -192,15 +192,17 @@ class CollectOptimization:
                 call_graph=self.call_graph, cache=self.resource_cache and not self.reset_cache
             )
 
-            self.bounds_map = resources.extract(
-                resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
-                make_command=config.make_command, cache=self.resource_cache and not self.reset_cache
-            )
+            # TODO: Temporary
+            if config.sb_extraction:
+                self.bounds_map = resources.extract(
+                    resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
+                    make_command=config.make_command, cache=self.resource_cache and not self.reset_cache
+                )
 
-            resources.store(
-                resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
-                bounds_map=self.bounds_map, cache=self.resource_cache and not self.reset_cache
-            )
+                resources.store(
+                    resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
+                    bounds_map=self.bounds_map, cache=self.resource_cache and not self.reset_cache
+                )
 
             # TODO: temporary
             if config.cg_extraction:
