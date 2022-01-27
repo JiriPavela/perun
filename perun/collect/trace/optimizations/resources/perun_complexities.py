@@ -19,7 +19,7 @@ def extract(stats_name, make_command, cache, **_):
             complexities = stats.get_stats_of(stats_name).get('complexity', {})
             print("Found complexities!")
             for func, complexity in complexities.items():
-                complexities[func] = Complexity.from_poly(complexity)
+                complexities[func] = Complexity(complexity)
     # Simulate the runner context by manually configured parameters and run the bounds collector
     if not complexities:
         print("Computing complexities!")
@@ -54,7 +54,7 @@ def store(stats_name, bounds_map, cache, **_):
             stats.get_stats_file_path(stats_name, check_existence=True)
             return
 
-    serialized = {func: complexity.name for func, complexity in bounds_map.items()}
+    serialized = {func: complexity.value for func, complexity in bounds_map.items()}
 
     stats.add_stats(stats_name, ['complexity'], [serialized])
     temp.store_temp('optimization/{}.json'.format(stats_name), serialized, json_format=True)

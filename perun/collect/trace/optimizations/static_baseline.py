@@ -38,7 +38,7 @@ def _call_graph_filter(call_graph, bounds_map, complexity, keep_top):
     for level in reversed(call_graph.levels[keep_top:]):
         for func in level:
             func_complexity = bounds_map.get(func, Complexity.GENERIC)
-            call_graph[func]['complexity'] = Complexity(func_complexity)
+            call_graph[func]['complexity'] = func_complexity
             # Filter functions that are below the threshold
             if func_complexity <= complexity:
                 filter_list.append(func)

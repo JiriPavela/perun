@@ -193,7 +193,7 @@ class CollectOptimization:
             )
 
             # TODO: Temporary
-            if config.sb_extraction:
+            if config.sb_extraction or Optimizations.BASELINE_STATIC in self.get_pre_optimizations():
                 self.bounds_map = resources.extract(
                     resources.Resources.COMPLEXITIES, stats_name='sb--inferbounds',
                     make_command=config.make_command, cache=self.resource_cache and not self.reset_cache
