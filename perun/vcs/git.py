@@ -3,8 +3,11 @@
 Contains concrete implementation of the function needed by perun to extract informations and work
 with version control systems.
 """
-
+from __future__ import annotations
 import os
+import tempfile
+from pathlib import Path
+from typing import Collection, Union
 
 import git
 import git.exc
@@ -273,3 +276,45 @@ def _checkout(git_repo, minor_version):
     :param str minor_version: newly checkout state
     """
     git_repo.git.checkout(minor_version)
+
+
+@create_repo_from_path
+def _hash_objects(
+        git_repo: git.Repo, objects: Path | Collection[Path]
+) -> tuple[str, dict[Path, str]]:
+    """Computes git SHA hashes for the supplied object(s).
+
+    Both a total hash of all objects and a per-object hashes are provided.
+
+    For multiple objects, git hash-object produces separate hash for each object. To obtain a single
+    hash, we pipe the collection of hashes into the hash-object again, simulating the command:
+
+        `git hash-object <object1> <object2> ... | git hash-object --stdin`
+
+    :param git_repo: a git repository
+    :param objects: a collection of git-hashable objects, or a single object
+
+    :return: a single SHA value and a "file (abs path) -> SHA" mapping for each individual file.
+    """
+    # The user can also pass a single file
+    # Also make sure that the specified files exist, otherwise git hash-object will fail
+    if isinstance(objects, Path):
+        objects = [objects.resolve()] if objects.exists() else []
+    else:
+        objects = sorted({obj.resolve() for obj in objects if obj.exists()})
+
+    # No objects = no hash
+    if not objects:
+        return '', {}
+    # Single object hash
+    if len(objects) == 1:
+        obj_hash = git_repo.git.hash_object(*objects)
+        return obj_hash, {objects[0]: obj_hash}
+    # Multiple objects
+    with tempfile.TemporaryFile("w+") as hash_file:
+        hashes: str = git_repo.git.hash_object(*objects)
+        hash_file.write(hashes)
+        hash_file.write('\n')
+        hash_file.seek(0)
+        total_hash = git_repo.git.hash_object(stdin=True, istream=hash_file)
+    return total_hash, dict(zip(objects, hashes.splitlines()))

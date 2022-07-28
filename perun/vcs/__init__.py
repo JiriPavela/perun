@@ -7,7 +7,10 @@ the wrapper.
 Inside the wrapper are defined function that are used for lookup of the concrete implementations
 depending of the chosen type/module, like e.g. git, svn, etc.
 """
+from __future__ import annotations
 import inspect
+from pathlib import Path
+from typing import Collection
 
 import perun.utils.log as perun_log
 import perun.logic.pcs as pcs
@@ -319,4 +322,26 @@ def checkout(minor_version):
     massaged_minor_version = massage_parameter(minor_version)
     dynamic_module_function_call(
         'perun.vcs', vcs_type, '_checkout', vcs_path, massaged_minor_version
+    )
+
+
+def hash_objects(objects: Path | Collection[Path]) -> tuple[str, dict[Path, str]]:
+    """Computes VCS hashes for the supplied object(s).
+
+    If no object is provided, the object hash is an empty string.
+    When multiple objects are supplied, the resulting hash is independent on the ordering in
+    which the objects are specified.
+    Non-existing objects are removed from the collection.
+
+    The function provides:
+        i) a single hash for all of the objects combined,
+        ii) and an individual hash for each of the supplied object (if any is supplied).
+
+    :param objects: a collection of VCS-hashable objects, or a single object
+
+    :return: a single hash value and a "file (abs path) -> hash" mapping for each individual file.
+    """
+    vcs_type, vcs_path = pcs.get_vcs_type(), pcs.get_vcs_path()
+    return dynamic_module_function_call(
+        'perun.vcs', vcs_type, '_hash_objects', vcs_path, objects
     )
