@@ -10,12 +10,13 @@ depending of the chosen type/module, like e.g. git, svn, etc.
 from __future__ import annotations
 import inspect
 from pathlib import Path
-from typing import Collection
+from typing import Collection, Generator
 
 import perun.utils.log as perun_log
 import perun.logic.pcs as pcs
 import perun.utils.decorators as decorators
 from perun.utils import dynamic_module_function_call
+from perun.utils.structs import VCSObjectChange
 
 __author__ = 'Tomas Fiedor'
 
@@ -344,4 +345,28 @@ def hash_objects(objects: Path | Collection[Path]) -> tuple[str, dict[Path, str]
     vcs_type, vcs_path = pcs.get_vcs_type(), pcs.get_vcs_path()
     return dynamic_module_function_call(
         'perun.vcs', vcs_type, '_hash_objects', vcs_path, objects
+    )
+
+
+def status_of(
+        files: Path | Collection[Path] | None = None
+) -> Generator[VCSObjectChange, None, None]:
+    """Wrapper for `git status` command that provides parsed results about repository changes.
+
+    If files are not specified:
+     - all changed files in the repository (be it rename, copy, change, untracked files, etc.)
+       are reported.
+    If files are specified
+     - the status of each provided existing file is reported, even if the file has not changed or
+       is not in the repository. However, non-existing files are ignored and not reported.
+
+    Note that the reported file paths are always resolved to absolute paths.
+
+    :param files: the files for which the status will be reported.
+
+    :return: VCS-detected changes in the repository or of the provided files.
+    """
+    vcs_type, vcs_path = pcs.get_vcs_type(), pcs.get_vcs_path()
+    return dynamic_module_function_call(
+        'perun.vcs', vcs_type, '_status_of', vcs_path, [] if files is None else files
     )

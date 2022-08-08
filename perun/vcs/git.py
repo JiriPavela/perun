@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Collection, Union
+from typing import Collection, Optional, Any, Generator
 
 import git
 import git.exc
@@ -17,8 +17,16 @@ import perun.utils.timestamps as timestamps
 import perun.utils.decorators as decorators
 from perun.utils.exceptions import VersionControlSystemException
 from perun.utils.helpers import MinorVersion, MajorVersion
+from perun.utils.structs import VCSChangeState, VCSObjectChange
+from perun.utils.containers import HierarchicalMap
 
 __author__ = "Tomas Fiedor"
+
+
+# General VCS change state, git status code (XY), new file path (e.g., when renamed)
+GitStatusValue = tuple[VCSChangeState, Optional[str], Optional[Path]]
+# Object path, status value
+GitStatusRecord = tuple[Path, GitStatusValue]
 
 
 def contains_git_repo(path):
@@ -318,3 +326,147 @@ def _hash_objects(
         hash_file.seek(0)
         total_hash = git_repo.git.hash_object(stdin=True, istream=hash_file)
     return total_hash, dict(zip(objects, hashes.splitlines()))
+
+
+@create_repo_from_path
+def _status(git_repo: git.Repo) -> Generator[VCSObjectChange, None, None]:
+    """Wrapper for `git status` command that provides parsed results about changed files.
+
+    Internally, the wrapper uses porcelain mode `status` that is easier to parse.
+    All changed files (be it rename, copy, change, untracked files, etc.) are reported.
+
+    Note that the reported file paths are always resolved to absolute paths.
+
+    :param git_repo: a git repository.
+
+    :return: VCS-detected changes in the repository.
+    """
+    # Bare repository does not provide its working tree directory.
+    if git_repo.working_tree_dir is None:
+        raise VersionControlSystemException("Unable to obtain status of a bare Git repository.")
+    repo_dir = Path(git_repo.working_tree_dir)
+
+    # Iterate all changes reported by the status
+    for file, status in _parse_porcelain_status(git_repo, untracked_files="normal"):
+        yield _git_status_to_vcs(repo_dir, file, status)
+
+
+@create_repo_from_path
+def _status_of(
+        git_repo: git.Repo, files: Path | Collection[Path]
+) -> Generator[VCSObjectChange, None, None]:
+    """Wrapper for `git status` command that filters the reported changes.
+
+    A special version of the `git status` wrapper that reports only the status of VCS files
+    specified by the user. For every provided file that exists, the wrapper reports its status,
+    even if the file has not changed or is not in the repository. However, non-existing files
+    are ignored and not reported.
+
+    Note that the reported file paths are always resolved to absolute paths.
+
+    :param git_repo: a git repository.
+    :param files: the files for which the status will be reported.
+
+    :return: VCS change status of each of the provided files.
+    """
+    # Delegate to simple status if no files were provided
+    if not files:
+        yield from _status(git_repo)
+        return
+
+    # We cannot resolve paths supplied by the user in bare repository.
+    if git_repo.working_tree_dir is None:
+        raise VersionControlSystemException(
+            "Unable to obtain files status of a bare Git repository."
+        )
+    repo_dir = Path(git_repo.working_tree_dir)
+
+    # A single Path might be supplied
+    if isinstance(files, Path):
+        files = [files]
+
+    # Hierarchical map of individual path components
+    repo_files: HierarchicalMap[str, GitStatusValue | None] = HierarchicalMap(None)
+    for file in files:
+        try:
+            # Make the file path absolute and then transform it to path relative to the repo
+            repo_path = file.resolve(strict=True).relative_to(repo_dir)
+            repo_files[repo_path.parts] = None
+        except ValueError:
+            # The path is not located within the repo.
+            repo_files[file.parts] = (VCSChangeState.NOT_IN_VCS, None, None)
+        except FileNotFoundError:
+            # The file does not exist. Ignore.
+            continue
+
+    # Iterate all changes reported by the status
+    for file, f_status in _parse_porcelain_status(git_repo, untracked_files="normal"):
+        # Update the change status of files found within the status report
+        target = repo_files.get(file.parts)
+        if target is not None:
+            target.insert([], f_status, recursive=True, overwrite=False, strict=True)
+
+    # Report the status for each existing file
+    for changed_file, change_status in repo_files.items():
+        yield _git_status_to_vcs(repo_dir, Path(*changed_file), change_status)
+
+
+def _git_status_to_vcs(
+        repo_dir: Path, file: Path, record: GitStatusValue | None) -> VCSObjectChange:
+    """Transform the git-specific status record to the general VCS format.
+
+    :param repo_dir: the working directory of a repo.
+    :param file: the file reported in the record.
+    :param record: the status details.
+
+    :return: general VCS status format of the record
+    """
+    if record is None:
+        state, code, new_file = VCSChangeState.NO_CHANGE, None, None
+    else:
+        state, code, new_file = record
+        if new_file is not None:
+            new_file = repo_dir / new_file
+    return repo_dir / file, state, {'code': code, 'new_file': new_file}
+
+
+def _map_code_to_status(status_code: str) -> VCSChangeState:
+    """Helper function that maps the git status code ("XY") to a status enumeration.
+
+    Based on: https://git-scm.com/docs/git-status
+
+    :param status_code: the git status code.
+
+    :return: VCS change enumeration
+    """
+    if len(status_code) != 2:
+        raise ValueError
+    # By default, we assume there is a change since we have a status code
+    status = VCSChangeState.CHANGED
+    if status_code == "??":
+        status = VCSChangeState.UNTRACKED
+    elif (status_code[0] == "R" and status_code[1] in " MTD") or status_code[1] == "R":
+        status = VCSChangeState.RENAMED
+    return status
+
+
+def _parse_porcelain_status(
+        git_repo: git.Repo, **status_kwargs: Any
+) -> Generator[GitStatusRecord, None, None]:
+    """Helper function for parsing `git status` output in v1 porcelain mode.
+
+    :param git_repo: a git repository.
+    :param status_kwargs: additional parameters to pass to the `git status` command.
+
+    :return: parsed record for each of the detected change.
+    """
+    git_status: str = git_repo.git.status(porcelain="v1", **status_kwargs)
+    for line in git_status.splitlines():
+        # Only a single space separates the status code and the file(s)
+        status_code, file_record = line[0:2], line[3:]
+        status = _map_code_to_status(status_code)
+        # The file record can contain two files (e.g., rename) separated by "->" and single spaces
+        files = file_record.split(" -> ")
+        # Each file name can also be quoted if it contains spaces, etc.
+        files = [file_name if file_name[0] != '"' else file_name[1:-1] for file_name in files]
+        yield Path(files[0]), (status, status_code, Path(files[1]) if len(files) > 1 else None)

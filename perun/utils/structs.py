@@ -1,11 +1,19 @@
 """List of helper and globally used structures and named tuples"""
 
+from __future__ import annotations
 import collections
 import shlex
+from pathlib import Path
 
 from enum import Enum
+from typing import Any
 
 __author__ = 'Tomas Fiedor'
+
+
+# Type alias for (VCS object absolute path, change state, VCS-specific details if needed)
+VCSObjectChange = tuple[Path, "VCSChangeState", dict[str, Any]]
+
 
 GeneratorSpec = collections.namedtuple('GeneratorSpec', 'constructor params')
 
@@ -366,3 +374,16 @@ class ProfileListConfig:
         self.id_width = len(str(self.list_len))
         # The magic 3 corresponds to the fixed string @p or @i
         self.header_width = self.id_width + 3
+
+
+class VCSChangeState(Enum):
+    """ Classifies object changes as reported by VCS.
+
+    In general, we distinguish only a small subset of all possible states. However, these states
+    are likely to be supported by a majority of VCS'.
+    """
+    NO_CHANGE = "no_change"
+    UNTRACKED = "untracked"
+    CHANGED = "changed"
+    RENAMED = "renamed"
+    NOT_IN_VCS = 'not_in_vcs'
