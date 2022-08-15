@@ -34,12 +34,15 @@ identify the data that should be manipulated by the functions.
 The contents of the stats file are stored in a compressed form to reduce the memory requirements.
 
 """
-
+from __future__ import annotations
 import os
 import json
 import re
 import shutil
+from pathlib import Path
+from typing import Generator, Any, TextIO, overload, Literal, ClassVar
 from zlib import error
+import bz2
 
 import perun.logic.store as store
 import perun.logic.index as index
@@ -54,11 +57,174 @@ import perun.utils.log as perun_log
 from perun.utils.helpers import SuppressedExceptions
 
 
+# The following aliases are used to correctly overload the return type of Stats file
+# Alias for textual file mode in bz2
+FileTextModes = Literal['rt', 'wt', 'xt', 'at']
+# Alias for binary file mode in bz2
+FileBinModes = Literal['r', 'rb', 'w', 'wb', 'x', 'xb', 'a', 'ab']
+
+
+# Compression suffix of bz2
+SUFFIX = '.bz2'
+
 # Match the timestamp format of the profile names
 PROFILE_TIMESTAMP_REGEX = re.compile(r"(-?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})")
 
 # Default number of displayed records for listing stats objects
 DEFAULT_STATS_LIST_TOP = 20
+
+
+# TODO: This module needs re-design. Use the StatsFile as a temporary workaround if needed.
+
+class StatsFile:
+    """Stats file wrapper.
+
+    The wrapper allows to specify a stats file path and checks its validity. The path is valid if:
+      - is an absolute path and <repository>/.perun/stats/<minor version dir>/ is part of it,
+      - is a relative path (will be concatenated to the .perun/stats/<minor version dir>/)
+
+    The supplied path (both absolute and relative) can contain additional levels of directories
+    on top of the .perun/stats/<minor version dir>/ path, e.g.: `.../<minor version dir>/a/b/file`.
+
+    To actually access the stats file and manipulate its contents, use the `open` method.
+    Furthermore, note that the StatsFile object can be conveniently reused for multiple
+    subsequent (!) opens:
+
+    ```
+    sf = StatsFile(Path('test.csv'), <minor version>)
+    with sf.open('wt') as f:
+        writer = csv.writer(f, delimiter=';')
+        writer.writerow(['stats', 'test'])
+
+    with st.open('rt') as f:
+        print(f.read())
+    ```
+
+    :ivar _abspath: an absolute path to the resolved stats file.
+    :ivar _version: the minor version, None for HEAD.
+    """
+    __slots__ = '_abspath', '_relpath', '_version'
+
+    write_modes: ClassVar[set[str]] = {'w', 'wb', 'wt', 'x', 'xb', 'xt', 'a', 'ab', 'at'}
+
+    def __init__(self, filepath: Path, minor_version: str | None = None) -> None:
+        """Constructor.
+
+        Attempts to resolve the supplied filepath w.r.t. the supplied minor version.
+        The filepath can refer to a file that does not exist yet. However, if the resulting path is
+        outside of the .perun/stats/<version> directory, an InvalidStatsPathException is raised.
+
+        :param filepath: absolute or relative path to the stats file.
+        :param minor_version: VCS version to link the stats file to.
+        """
+        # Make sure that the file will be created in the appropriate stats directory
+        minor_dir = Path(find_minor_stats_directory(minor_version)[1])
+        if filepath.is_absolute():
+            # Absolute paths are allowed only if they are within the appropriate minor version dir
+            if not filepath.is_relative_to(minor_dir):
+                raise exceptions.InvalidStatsPathException(filepath, minor_dir)
+        else:
+            filepath = minor_dir / filepath
+        # Make sure that the stats file has a correct compression suffix
+        if filepath.suffix != SUFFIX:
+            filepath = filepath.with_suffix(filepath.suffix + SUFFIX)
+        self._abspath: Path = filepath
+        self._relpath: Path = filepath.relative_to(minor_dir)
+        self._version: str | None = minor_version
+
+    @property
+    def absolute_path(self):
+        return self._abspath
+
+    @property
+    def relative_path(self):
+        return self._relpath
+
+    def exist(self) -> bool:
+        """Checks whether a stats file corresponding to the given path exists.
+
+        :return: True if the path corresponds to an existing file, False otherwise.
+        """
+        return self._abspath.exists()
+
+    @overload
+    def open(self, mode: FileTextModes, **bz2_kwargs: Any) -> TextIO:
+        # A dummy implementation to avoid pylint no-context-manager false positive:
+        # Source: https://github.com/PyCQA/pylint/issues/5273
+        return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+
+    @overload
+    def open(self, mode: FileBinModes, **bz2_kwargs: Any) -> bz2.BZ2File:
+        return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+
+    def open(self, mode: FileTextModes | FileBinModes, **bz2_kwargs: Any) -> TextIO | bz2.BZ2File:
+        """Open the specified stats file in the given mode.
+
+        The stats files are stored in a bz2 compression format. The returned IO object takes care
+        of the underlying incremental (de)compression, hence the IO object can be manipulated
+        (written to, read from) as usual Text or Binary IO files.
+
+        The returned object can be used standalone or as a usual IO context manager object.
+        The supported modes can be found in the bz2 module documentation.
+
+        :param mode: a mode in which to open the file (read, write, append, exclusive create, ...).
+        :param bz2_kwargs: additional bz2 (de)compression parameters.
+
+        :return: textual or binary IO object, based on the selected mode (text or binary).
+        """
+        # Create the stats version directory only if we attempt to write
+        if mode in self.write_modes:
+            version_dir = _touch_minor_stats_directory(self._version)
+            # Create additional version sub-directories on the path
+            if self._abspath.parent != version_dir:
+                utils_helpers.touch_dir(str(self._abspath.parent))
+        # Remove keys that are supplied as positional arguments
+        for invalid_key in ('filename', 'mode'):
+            bz2_kwargs.pop(invalid_key, None)
+        try:
+            return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+        except FileNotFoundError as exc:
+            raise exceptions.StatsFileNotFoundException(self._abspath) from exc
+
+
+def exist_any(path_glob: str, minor_version: str | None = None) -> bool:
+    """Checks the existence of any stats file corresponding to a glob pattern and a VCS version.
+
+    Note that the glob pattern will be resolved on top of the .perun/stats/<version> directory.
+    Any matched file outside of this directory will be ignored. The glob pattern will be
+    automatically extended with the compression suffix (e.g., '.bz2') if not provided.
+
+    :param path_glob: a glob pattern to resolve.
+    :param minor_version: a VCS version.
+
+    :return: True if the glob matches any existing stats file, False otherwise.
+    """
+    for _ in get_files(path_glob, minor_version):
+        return True
+    return False
+
+
+def get_files(path_glob: str, minor_version: str | None = None) -> Generator[StatsFile, None, None]:
+    """Iterates stats files corresponding to a glob pattern and a VCS version.
+
+    Note that the glob pattern will be resolved on top of the .perun/stats/<version> directory.
+    Any matched file outside of this directory will be ignored. The glob pattern will be
+    automatically extended with the compression suffix (e.g., '.bz2') if not provided.
+
+    :param path_glob: a glob pattern to match.
+    :param minor_version: a VCS version.
+
+    :return: generator object that iterates the matched stats files
+    """
+    minor_dir = Path(find_minor_stats_directory(minor_version)[1])
+    # Make sure that the glob will resolve correctly if the compression suffix is missing
+    if not path_glob.endswith(SUFFIX):
+        path_glob += SUFFIX
+    for file in minor_dir.glob(path_glob):
+        # The glob pattern can produce paths outside of the stats directory. Filter out such files.
+        file = file.resolve()
+        if file.is_relative_to(minor_dir) and file.is_file():
+            yield StatsFile(file, minor_version)
 
 
 def build_stats_filename_as_profile_source(profile, ignore_timestamp, minor_version=None):

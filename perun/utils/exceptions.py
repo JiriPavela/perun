@@ -1,4 +1,7 @@
 """Collection of helper exception classes"""
+from __future__ import annotations
+from pathlib import Path
+
 
 __author__ = 'Tomas Fiedor'
 
@@ -110,6 +113,21 @@ class StatsFileNotFoundException(Exception):
 
     def __str__(self):
         return self.msg
+
+
+class InvalidStatsPathException(Exception):
+    """Raised when a stats file path is not relative to the appropriate stats directory.
+
+    The path must be relative to the correct .perun/stats/<minor_version>/ directory.
+    """
+    def __init__(self, filename: str | Path, minor_version_dir: str | Path):
+        super().__init__("")
+        self.path: str = str(filename)
+        self.version_dir: str = str(minor_version_dir)
+
+    def __str__(self):
+        return f"The stats file path '{self.path}' is not relative to the expected " \
+               f"'{self.version_dir}' directory."
 
 
 class InvalidTempPathException(Exception):
