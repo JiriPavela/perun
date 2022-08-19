@@ -10,7 +10,7 @@ depending of the chosen type/module, like e.g. git, svn, etc.
 from __future__ import annotations
 import inspect
 from pathlib import Path
-from typing import Collection, Generator
+from typing import Collection, Generator, Literal, overload
 
 import perun.utils.log as perun_log
 import perun.logic.pcs as pcs
@@ -70,6 +70,32 @@ def get_minor_head():
         perun_log.error(
             "while fetching head minor version: {}".format(value_error)
         )
+
+
+@overload
+def get_working_tree_dir(strict: Literal[True]) -> Path:
+    ...
+
+
+@overload
+def get_working_tree_dir(strict: Literal[False]) -> Path | None:
+    ...
+
+
+def get_working_tree_dir(strict: bool) -> Path | None:
+    """Obtain a working tree directory path.
+
+    If the path cannot be obtained (e.g., the repository is bare), either return None or
+    raise an exception, based on the `strict` parameter value.
+
+    :param strict: specifies whether the absence of a working tree dir should raise an exception.
+
+    :return: a path to the working tree directory or None if it cannot be retrieved.
+    """
+    vcs_type, vcs_path = pcs.get_vcs_type(), pcs.get_vcs_path()
+    return dynamic_module_function_call(
+        'perun.vcs', vcs_type, '_working_tree_dir', vcs_path, strict
+    )
 
 
 def init(vcs_init_params):

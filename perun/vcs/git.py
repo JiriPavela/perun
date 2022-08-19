@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Collection, Optional, Any, Generator
+from typing import Collection, Optional, Any, Generator, Literal, overload
 
 import git
 import git.exc
@@ -76,6 +76,38 @@ def _init(vcs_path, vcs_init_params):
     else:
         perun_log.quiet_info("Initialized empty Git repository in {}".format(vcs_path))
     return True
+
+
+@overload
+def _working_tree_dir(git_repo: git.Repo, strict: Literal[True]) -> Path:
+    ...
+
+
+@overload
+def _working_tree_dir(git_repo: git.Repo, strict: Literal[False]) -> Path | None:
+    ...
+
+
+@create_repo_from_path
+def _working_tree_dir(git_repo: git.Repo, strict: bool) -> Path | None:
+    """Obtain a working tree directory path.
+
+    If the path cannot be obtained (e.g., the repository is bare), either return None or
+    raise an exception, based on the `strict` parameter value.
+
+    :param git_repo: a git repository.
+    :param strict: specifies whether the absence of a working tree dir should raise an exception.
+
+    :return: a path to the working tree directory or None if it cannot be retrieved.
+    """
+    wtd = git_repo.working_tree_dir
+    if wtd is None:
+        if strict:
+            raise VersionControlSystemException(
+                "A bare Git repository does not have a working tree directory."
+            )
+        return None
+    return Path(wtd)
 
 
 @create_repo_from_path
@@ -341,11 +373,8 @@ def _status(git_repo: git.Repo) -> Generator[VCSObjectChange, None, None]:
 
     :return: VCS-detected changes in the repository.
     """
-    # Bare repository does not provide its working tree directory.
-    if git_repo.working_tree_dir is None:
-        raise VersionControlSystemException("Unable to obtain status of a bare Git repository.")
-    repo_dir = Path(git_repo.working_tree_dir)
-
+    # A bare repository does not provide its working tree directory.
+    repo_dir = _working_tree_dir(git_repo, strict=True)
     # Iterate all changes reported by the status
     for file, status in _parse_porcelain_status(git_repo, untracked_files="normal"):
         yield _git_status_to_vcs(repo_dir, file, status)
@@ -375,12 +404,7 @@ def _status_of(
         return
 
     # We cannot resolve paths supplied by the user in bare repository.
-    if git_repo.working_tree_dir is None:
-        raise VersionControlSystemException(
-            "Unable to obtain files status of a bare Git repository."
-        )
-    repo_dir = Path(git_repo.working_tree_dir)
-
+    repo_dir = _working_tree_dir(git_repo, strict=True)
     # A single Path might be supplied
     if isinstance(files, Path):
         files = [files]
