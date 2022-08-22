@@ -40,7 +40,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Generator, Any, TextIO, overload, Literal, ClassVar
+from typing import Generator, Any, TextIO, overload, Literal, ClassVar, TypeVar, Generic, Type
 from zlib import error
 import bz2
 
@@ -57,15 +57,15 @@ import perun.utils.log as perun_log
 from perun.utils.helpers import SuppressedExceptions
 
 
-# The following aliases are used to correctly overload the return type of Stats file
+# Path Type: a generic type parameter for StatsFile.
+# It is used to specify / restrict the type of the underlying stats file.
+PT = TypeVar('PT', bound="StatsPath")
+
+# The following aliases are used to correctly overload the return type of StatsFile
 # Alias for textual file mode in bz2
 FileTextModes = Literal['rt', 'wt', 'xt', 'at']
 # Alias for binary file mode in bz2
 FileBinModes = Literal['r', 'rb', 'w', 'wb', 'x', 'xb', 'a', 'ab']
-
-
-# Compression suffix of bz2
-SUFFIX = '.bz2'
 
 # Match the timestamp format of the profile names
 PROFILE_TIMESTAMP_REGEX = re.compile(r"(-?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})")
@@ -74,88 +74,239 @@ PROFILE_TIMESTAMP_REGEX = re.compile(r"(-?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})")
 DEFAULT_STATS_LIST_TOP = 20
 
 
-# TODO: This module needs re-design. Use the StatsFile as a temporary workaround if needed.
+# TODO: This module needs a re-design. Use StatsFile and StatsPath as a temporary workaround.
 
-class StatsFile:
-    """Stats file wrapper.
+class StatsPath:
+    """A class representing a stats file, or a glob, path.
 
-    The wrapper allows to specify a stats file path and checks its validity. The path is valid if:
-      - is an absolute path and <repository>/.perun/stats/<minor version dir>/ is part of it,
-      - is a relative path (will be concatenated to the .perun/stats/<minor version dir>/)
+    The main advantages of using a specialized path class for stats files (globs) are:
+     1) Automatic validation of the input paths and globs when creating a new instance.
+     2) The path internals are hidden, hence once an instance is created, the validity does not
+        have to be checked every time it is passed to a function (unlike Path or path-like strings).
+     3) It is possible to narrow the type of stats files by deriving from this class. This allows
+        to easily restrict the lookup of stats files to a specific type just by supplying the
+        appropriate subclass of StatsPath.
+
+    The input file (glob) path is valid if:
+     - is an absolute path and <repository>/.perun/stats/<minor version dir>/ is part of it,
+     - is a relative path (will be concatenated to the .perun/stats/<minor version dir>/)
 
     The supplied path (both absolute and relative) can contain additional levels of directories
     on top of the .perun/stats/<minor version dir>/ path, e.g.: `.../<minor version dir>/a/b/file`.
+
+    It is generally impossible to distinguish a file path from a glob, hence it is the user's
+    responsibility to track which objects represent globs, and which ones represent exact paths.
+    Nonetheless, objects representing file paths can be used where globs are expected, and vice
+    versa (although the results will probably differ from expectations).
+
+    When deriving from this class, make sure to properly override (if needed) the `suffix` and
+    `_format` class variables, and the `from_path` class method:
+      - The overridden `suffix` should contain all suffixes, including the superclass ones. An
+        example of correct compound suffix definition is: `suffix = '.mysuff' + StatsPath.suffix`.
+      - The `_format` should be a compiled regex pattern that matches the expected file path
+        format of the derived class. It is used to construct a StatsPath instance from a Path, if
+        possible. The pattern should work on both relative and absolute paths. A re.search method
+        is used, hence, the regex should most likely end with '<suffix>$'. Moreover, if the
+        pattern contains regex groups, they will be used as parameters for the `__init__` method.
+        If the format is set to None, no checking will be done and all stats paths will be
+        considered as valid. Note that the pattern doesn't have to check the validity of the name,
+        only its format. The validity checks can be done in the `__init__` or `from_path` methods,
+        if desired.
+      - The `from_path` alternative constructor should work 'as is' for derived classes that
+        can be constructed using just string parameters obtainable from the regex match. Otherwise,
+        the `from_path` method should be overridden.
+
+    :ivar _abspath: absolute file (glob) path.
+    :ivar _relpath: stats file (glob) path relative to .perun/stats/<minor version dir>/.
+    :ivar _version: VCS minor version that the file (glob) path is relative to.
+    """
+    __slots__ = '_abspath', '_relpath', '_version'
+    # Compression suffix common to all stats files
+    suffix: ClassVar[str] = '.bz2'
+    # The format should include all of the suffixes that are used
+    _format: re.Pattern[str] | None = None
+
+    def __init__(self, *path_parts: str | Path, minor_version: str | None = None) -> None:
+        """Constructor. Creates a file (glob) path from 1..N string or Path segments.
+
+        Attempts to resolve the supplied filepath (glob) w.r.t. the supplied minor version.
+        The path (glob) can refer to a file that does not exist yet. However, if the resulting path
+        is outside of the .perun/stats/<version> directory, an InvalidStatsPathException is raised.
+
+        :param path_parts: file (glob) path segments.
+        :param minor_version: VCS version to link the path to.
+        """
+        # Check that all parts of the path were provided
+        if not all(path_parts):
+            raise InvalidStatsPathException(
+                f'Invalid {self.__class__.__name__} from an incomplete specification: {path_parts}.'
+            )
+        # Make sure that the path corresponds to an appropriate stats directory
+        filepath = Path(*path_parts)
+        minor_dir = Path(find_minor_stats_directory(minor_version)[1])
+        if filepath.is_absolute():
+            # Absolute paths are allowed only if they are within the appropriate minor version dir
+            if not filepath.is_relative_to(minor_dir):
+                raise InvalidStatsPathException(
+                    f"The stats file path '{filepath}' is not relative to the expected "
+                    f"'{minor_dir}' directory."
+                )
+        else:
+            filepath = minor_dir / filepath
+        # Make sure that the (possibly derived) stats file has correct suffix(es)
+        filepath = self._resolve_suffixes(filepath)
+        # These attributes must never be changed directly, access them through read-only properties
+        self._abspath: Path = filepath
+        self._relpath: Path = filepath.relative_to(minor_dir)
+        self._version: str | None = minor_version
+
+    @classmethod
+    def from_path(cls: Type[PT], path: Path, minor_version: str | None) -> PT:
+        """Constructs a StatsPath (or its subclass) from a Path object, if possible.
+
+        The method first checks that the file path (glob) is valid w.r.t. the name format pattern.
+         - If no format pattern is specified, the path is assumed to be valid.
+         - If a format pattern is specified and the path fails to match, an
+           InvalidStatePathException is raised.
+         - If a format pattern is specified, the path is successfully matched but the match
+           contains no regex groups, the path itself is used to construct the object.
+         - If a format pattern is specified, the path is successfully matched and it contains
+           regex groups, the matched groups are used as parameters for the object constructor.
+
+        :param path: a stats file (glob) path to construct the object from.
+        :param minor_version: VCS version to link the path to.
+
+        :return: a constructed stats path object, if possible.
+        """
+        matches, match_obj = cls.matches_format(path)
+        if not matches:
+            # There is a pattern provided and the path does not match it
+            raise InvalidStatsPathException(f"'{path}' is invalid {cls.__class__.__name__} path.")
+        if match_obj is not None and match_obj.groups():
+            # The provided path matches the regex and contains match groups for the constructor
+            return cls(*(str(grp) for grp in match_obj.groups()), minor_version=minor_version)
+        # No regex groups, use the path itself as an argument
+        return cls(path, minor_version=minor_version)
+
+    @classmethod
+    def matches_format(cls, path: Path) -> tuple[bool, re.Match | None]:
+        """Validates that the file (glob) path matches the format regex.
+
+        Note that the re.search method is used, hence it is recommended to anchor the format regex
+        by using the '$' at the end.
+
+        :param path: a stats file (glob) path for format validation.
+
+        :return: indication whether the path matches the pattern, optional regex match object.
+        """
+        if cls._format is None:
+            return True, None
+        match = cls._format.search(str(path))
+        return match is not None, match
+
+    @property
+    def absolute(self) -> Path:
+        """Retrieves the absolute stats file (glob) path.
+
+        :return: the absolute stats file (glob) path.
+        """
+        return self._abspath
+
+    @property
+    def relative(self) -> Path:
+        """Retrieves the relative stats file (glob) path.
+
+        :return: the relative stats file (glob) path.
+        """
+        return self._relpath
+
+    @property
+    def minor_version(self) -> str | None:
+        """Retrieves the VCS minor version linked to the path.
+
+        :return: the VCS minor version representation.
+        """
+        return self._version
+
+    def as_glob(self) -> str:
+        """Retrieves the path as a glob string.
+
+        :return: path as a glob.
+        """
+        return str(self._relpath)
+
+    def _resolve_suffixes(self, path: Path) -> Path:
+        """Ensures the path has correct suffixes w.r.t. the stats path class.
+
+        Checks that the path has all of the suffixes specified in the `suffix` class variable AND
+        that the base compression suffix is there.
+        If not, the path is changed to contain all of the correct suffixes.
+
+        :param path: a stats file (glob) path to resolve the suffix for.
+
+        :return: the stats path with correct suffixes.
+        """
+        file_suffixes = ''.join(path.suffixes)
+        if file_suffixes != self.suffix:
+            # Remove suffixes one by one until there is only the file name
+            while path.suffix:
+                path = path.with_suffix("")
+            # Now add the correct suffix for the file type
+            path = path.with_suffix(self.suffix)
+        # Make sure the file's last suffix is the compression suffix common to all stats files
+        if path.suffix != StatsPath.suffix:
+            path = path.with_suffix(path.suffix + StatsPath.suffix)
+        return path
+
+
+class StatsFile(Generic[PT]):
+    """Generic stats file wrapper class.
+
+    The class is parametrized by a StatsPath object or its subclasses. The path should represent
+    an actual file (that might not yet exist) and not a glob.
 
     To actually access the stats file and manipulate its contents, use the `open` method.
     Furthermore, note that the StatsFile object can be conveniently reused for multiple
     subsequent (!) opens:
 
     ```
-    sf = StatsFile(Path('test.csv'), <minor version>)
-    with sf.open('wt') as f:
-        writer = csv.writer(f, delimiter=';')
-        writer.writerow(['stats', 'test'])
+    sf = StatsFile(StatsPath('test', <minor version>))
+    with sf.open('wb') as f:
+        pickle.dump(<obj>, f)
 
-    with st.open('rt') as f:
-        print(f.read())
+    with sf.open('rb') as f:
+        obj = pickle.load(f)
     ```
 
-    :ivar _abspath: an absolute path to the resolved stats file.
-    :ivar _version: the minor version, None for HEAD.
+    :ivar filepath: a StatsPath (or its subclass) instance.
     """
-    __slots__ = '_abspath', '_relpath', '_version'
+    __slots__ = ('filepath',)
 
     write_modes: ClassVar[set[str]] = {'w', 'wb', 'wt', 'x', 'xb', 'xt', 'a', 'ab', 'at'}
 
-    def __init__(self, filepath: Path, minor_version: str | None = None) -> None:
+    def __init__(self, filepath: PT) -> None:
         """Constructor.
 
-        Attempts to resolve the supplied filepath w.r.t. the supplied minor version.
-        The filepath can refer to a file that does not exist yet. However, if the resulting path is
-        outside of the .perun/stats/<version> directory, an InvalidStatsPathException is raised.
-
-        :param filepath: absolute or relative path to the stats file.
-        :param minor_version: VCS version to link the stats file to.
+        :param filepath: a StatsPath (or its subclass) instance.
         """
-        # Make sure that the file will be created in the appropriate stats directory
-        minor_dir = Path(find_minor_stats_directory(minor_version)[1])
-        if filepath.is_absolute():
-            # Absolute paths are allowed only if they are within the appropriate minor version dir
-            if not filepath.is_relative_to(minor_dir):
-                raise exceptions.InvalidStatsPathException(filepath, minor_dir)
-        else:
-            filepath = minor_dir / filepath
-        # Make sure that the stats file has a correct compression suffix
-        if filepath.suffix != SUFFIX:
-            filepath = filepath.with_suffix(filepath.suffix + SUFFIX)
-        self._abspath: Path = filepath
-        self._relpath: Path = filepath.relative_to(minor_dir)
-        self._version: str | None = minor_version
-
-    @property
-    def absolute_path(self):
-        return self._abspath
-
-    @property
-    def relative_path(self):
-        return self._relpath
+        self.filepath: PT = filepath
 
     def exist(self) -> bool:
         """Checks whether a stats file corresponding to the given path exists.
 
         :return: True if the path corresponds to an existing file, False otherwise.
         """
-        return self._abspath.exists()
+        return self.filepath.absolute.exists()
 
     @overload
     def open(self, mode: FileTextModes, **bz2_kwargs: Any) -> TextIO:
         # A dummy implementation to avoid pylint no-context-manager false positive:
         # Source: https://github.com/PyCQA/pylint/issues/5273
-        return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+        return bz2.open(self.filepath.absolute, mode=mode, **bz2_kwargs)
 
     @overload
     def open(self, mode: FileBinModes, **bz2_kwargs: Any) -> bz2.BZ2File:
-        return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+        return bz2.open(self.filepath.absolute, mode=mode, **bz2_kwargs)
 
     def open(self, mode: FileTextModes | FileBinModes, **bz2_kwargs: Any) -> TextIO | bz2.BZ2File:
         """Open the specified stats file in the given mode.
@@ -173,58 +324,85 @@ class StatsFile:
         :return: textual or binary IO object, based on the selected mode (text or binary).
         """
         # Create the stats version directory only if we attempt to write
+        version, abspath = self.filepath.minor_version, self.filepath.absolute
         if mode in self.write_modes:
-            version_dir = _touch_minor_stats_directory(self._version)
+            version_dir = _touch_minor_stats_directory(version)
             # Create additional version sub-directories on the path
-            if self._abspath.parent != version_dir:
-                utils_helpers.touch_dir(str(self._abspath.parent))
+            if abspath.parent != version_dir:
+                utils_helpers.touch_dir(str(abspath.parent))
         # Remove keys that are supplied as positional arguments
         for invalid_key in ('filename', 'mode'):
             bz2_kwargs.pop(invalid_key, None)
         try:
-            return bz2.open(self._abspath, mode=mode, **bz2_kwargs)
+            return bz2.open(abspath, mode=mode, **bz2_kwargs)
         except FileNotFoundError as exc:
-            raise exceptions.StatsFileNotFoundException(self._abspath) from exc
+            raise StatsFileNotFoundException(abspath) from exc
 
 
-def exist_any(path_glob: str, minor_version: str | None = None) -> bool:
-    """Checks the existence of any stats file corresponding to a glob pattern and a VCS version.
-
-    Note that the glob pattern will be resolved on top of the .perun/stats/<version> directory.
-    Any matched file outside of this directory will be ignored. The glob pattern will be
-    automatically extended with the compression suffix (e.g., '.bz2') if not provided.
+def exist_any(path_glob: PT) -> bool:
+    """Checks the existence of any stats file corresponding to a glob pattern.
 
     :param path_glob: a glob pattern to resolve.
-    :param minor_version: a VCS version.
 
-    :return: True if the glob matches any existing stats file, False otherwise.
+    :return: True if the glob matches at least one existing stats file, False otherwise.
     """
-    for _ in get_files(path_glob, minor_version):
+    for _ in iter_paths(path_glob):
         return True
     return False
 
 
-def get_files(path_glob: str, minor_version: str | None = None) -> Generator[StatsFile, None, None]:
-    """Iterates stats files corresponding to a glob pattern and a VCS version.
+def iter_paths(path_glob: PT, b_min: int = 0, b_max: int = -1) -> Generator[PT, None, None]:
+    """Iterates existing stats file paths based on the glob and the path type.
 
-    Note that the glob pattern will be resolved on top of the .perun/stats/<version> directory.
-    Any matched file outside of this directory will be ignored. The glob pattern will be
-    automatically extended with the compression suffix (e.g., '.bz2') if not provided.
+    Only valid paths corresponding to the generic path type AND the glob pattern will be iterated.
+    E.g., when path_glob is an instance of a class `MyStats` that is a subclass of `StatsFile`,
+    only the stats files that match the glob pattern itself and the name format of `MyStats` will
+    be iterated.
 
-    :param path_glob: a glob pattern to match.
-    :param minor_version: a VCS version.
+    It is possible to further check the bounds of the iteration, so that when the bounds are
+    violated (i.e., the number of iterated elements is not in [min, max]), an
+    IteratorBoundsException is raised.
 
-    :return: generator object that iterates the matched stats files
+    :param path_glob: a glob pattern to filter the iterated paths.
+    :param b_min: the minimum number of elements that should be present in the iterator.
+    :param b_max: the maximum number of elements that should be present in the iterator.
+
+    :return: a generator of paths matching the glob pattern and the path type format.
     """
+    minor_version = path_glob.minor_version
     minor_dir = Path(find_minor_stats_directory(minor_version)[1])
-    # Make sure that the glob will resolve correctly if the compression suffix is missing
-    if not path_glob.endswith(SUFFIX):
-        path_glob += SUFFIX
-    for file in minor_dir.glob(path_glob):
-        # The glob pattern can produce paths outside of the stats directory. Filter out such files.
-        file = file.resolve()
-        if file.is_relative_to(minor_dir) and file.is_file():
-            yield StatsFile(file, minor_version)
+    cnt = 0
+    for file in minor_dir.glob(path_glob.as_glob()):
+        try:
+            # The constructor takes care of invalid paths.
+            valid_path = path_glob.__class__.from_path(file.resolve(), minor_version)
+            cnt += 1
+            if 0 < b_max < cnt:
+                # Upper bound set and too many files found
+                raise exceptions.IteratorBoundsException(b_min, b_max, cnt)
+            yield valid_path
+        except InvalidStatsPathException:
+            pass
+    if cnt < b_min:
+        # Lower bound set and not enough files found
+        raise exceptions.IteratorBoundsException(b_min, b_max, cnt)
+
+
+def iter_files(
+        path_glob: PT, b_min: int = 0, b_max: int = -1
+) -> Generator[StatsFile[PT], None, None]:
+    """Iterates existing stats files based on the glob and the path type.
+
+    This function behaves similarly to the `iter_paths` function, but it transforms the stats file
+    paths directly to the StatsFile objects.
+
+    :param path_glob: a glob pattern to filter the iterated paths.
+    :param b_min: the minimum number of elements that should be present in the iterator.
+    :param b_max: the maximum number of elements that should be present in the iterator.
+
+    :return: a generator of StatsFiles matching the glob pattern and the path type format.
+    """
+    yield from (StatsFile(path) for path in iter_paths(path_glob, b_min, b_max))
 
 
 def build_stats_filename_as_profile_source(profile, ignore_timestamp, minor_version=None):
@@ -286,7 +464,7 @@ def get_stats_file_path(stats_filename, minor_version=None, check_existence=Fals
         _touch_minor_stats_directory(minor_version)
     # Check if the file exists
     if check_existence and not os.path.exists(stats_file):
-        raise exceptions.StatsFileNotFoundException(stats_file)
+        raise StatsFileNotFoundException(stats_file)
     return stats_file
 
 
@@ -433,7 +611,7 @@ def get_latest(stats_filename, stats_ids=None, exclude_self=False):
         versions = versions[1:]
     # Traverse all the version directories and try to find it
     for version, _ in versions:
-        with SuppressedExceptions(exceptions.StatsFileNotFoundException):
+        with SuppressedExceptions(StatsFileNotFoundException):
             return get_stats_of(stats_filename, stats_ids, version)
     return {}
 
@@ -449,7 +627,7 @@ def delete_stats_file_across_versions(stats_filename, keep_directory=False):
     # Traverse all the version directories and attempt to delete the file
     for version, _ in list_stat_versions():
         # If the file was not found in this version, simply continue
-        with SuppressedExceptions(exceptions.StatsFileNotFoundException):
+        with SuppressedExceptions(StatsFileNotFoundException):
             delete_stats_file(stats_filename, version, True)
             matches.append(version)
 
@@ -850,3 +1028,30 @@ def _load_stats_index():
     """
     stats_index = index.load_custom_index(pcs.get_stats_index())
     return stats_index if stats_index else []
+
+
+class StatsFileNotFoundException(Exception):
+    """Raised when the looked up stats file does not exist."""
+    def __init__(self, filename: Path | str) -> None:
+        super().__init__("")
+        self.path: Path | str = filename
+
+    def __str__(self) -> str:
+        return f"The requested stats file '{self.path}' does not exist."
+
+
+class InvalidStatsPathException(Exception):
+    """Raised when a stats file path is invalid.
+
+    The exception message should clarify the reason why the path is invalid, e.g.:
+     - it is not relative to the .perun/stats/<minor_version>/ directory,
+     - it does not conform to the expected path pattern w.r.t. stats file type,
+     - it cannot be properly constructed from the related stats file object (e.g., when empty).
+    """
+
+
+class StatsFilesLookupException(Exception):
+    """Raised when stats file lookup fails for some reason.
+
+    The exception message should further clarify the exact problem.
+    """

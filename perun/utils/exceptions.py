@@ -1,6 +1,5 @@
 """Collection of helper exception classes"""
 from __future__ import annotations
-from pathlib import Path
 
 
 __author__ = 'Tomas Fiedor'
@@ -102,32 +101,6 @@ class IndexNotFoundException(Exception):
 
     def __str__(self):
         return "Index file for the minor version '{}' was not found.".format(self.minor_version)
-
-
-class StatsFileNotFoundException(Exception):
-    """Raised when the looked up stats file does not exist"""
-    def __init__(self, filename):
-        super().__init__("")
-        self.path = filename
-        self.msg = "The requested stats file '{}' does not exist".format(self.path)
-
-    def __str__(self):
-        return self.msg
-
-
-class InvalidStatsPathException(Exception):
-    """Raised when a stats file path is not relative to the appropriate stats directory.
-
-    The path must be relative to the correct .perun/stats/<minor_version>/ directory.
-    """
-    def __init__(self, filename: str | Path, minor_version_dir: str | Path):
-        super().__init__("")
-        self.path: str = str(filename)
-        self.version_dir: str = str(minor_version_dir)
-
-    def __str__(self):
-        return f"The stats file path '{self.path}' is not relative to the expected " \
-               f"'{self.version_dir}' directory."
 
 
 class InvalidTempPathException(Exception):
@@ -407,3 +380,25 @@ class SignalReceivedException(BaseException):
 
     def __str__(self):
         return "Received signal: {}".format(self.signum)
+
+
+class IteratorBoundsException(Exception):
+    """Raised when the number of iterated elements is not within the specified bounds.
+    """
+    def __init__(self, min_bound: int, max_bound: int, actual_count: int) -> None:
+        """Constructor.
+
+        :ivar min_bound: the lower bound.
+        :ivar max_bound: the upper bound.
+        :ivar actual_count: the actual number of elements.
+        """
+        super().__init__()
+        self.min_bound: int = min_bound
+        self.max_bound: int = max_bound
+        self.count: int = actual_count
+
+    def __str__(self) -> str:
+        min_b = str(self.min_bound) if self.min_bound >= 0 else "0"
+        max_b = str(self.max_bound) if self.max_bound >= 0 else "inf"
+        cnt = self.count if self.count < self.min_bound else f"{self.count}+"
+        return f"Iterator bounded to [{min_b}, {max_b}] provided {cnt} elements."
