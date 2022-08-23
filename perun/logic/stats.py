@@ -40,7 +40,8 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Generator, Any, TextIO, overload, Literal, ClassVar, TypeVar, Generic, Type
+from typing import Generator, Any, TextIO, overload, Literal, ClassVar, TypeVar, Generic, Type, \
+    Union, Iterable
 from zlib import error
 import bz2
 
@@ -67,6 +68,11 @@ FileTextModes = Literal['rt', 'wt', 'xt', 'at']
 # Alias for binary file mode in bz2
 FileBinModes = Literal['r', 'rb', 'w', 'wb', 'x', 'xb', 'a', 'ab']
 
+# Possible specification of minor versions for lookup / iteration
+VersionsLookup = Union[Iterable[str], str, None]
+# Unified iterable
+VersionsIterable = Iterable[str]
+
 # Match the timestamp format of the profile names
 PROFILE_TIMESTAMP_REGEX = re.compile(r"(-?\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})")
 
@@ -75,6 +81,8 @@ DEFAULT_STATS_LIST_TOP = 20
 
 
 # TODO: This module needs a re-design. Use StatsFile and StatsPath as a temporary workaround.
+# TODO: Rework index, the versions should be ordered according to the parent relation, not date.
+# TODO: The stats lookup / iteration implementation is temporary, needs some more rework.
 
 class StatsPath:
     """A class representing a stats file, or a glob, path.
@@ -339,20 +347,60 @@ class StatsFile(Generic[PT]):
             raise StatsFileNotFoundException(abspath) from exc
 
 
-def exist_any(path_glob: PT) -> bool:
+def exist_any(path_glob: PT, versions: VersionsLookup = None) -> bool:
     """Checks the existence of any stats file corresponding to a glob pattern.
 
+    If `versions` are not specified, the minor version in the path glob will be used.
+    Otherwise, only the specified `versions` will be checked (the path glob version
+    will be ignored).
+
     :param path_glob: a glob pattern to resolve.
+    :param versions: if set, only the versions will be checked.
 
     :return: True if the glob matches at least one existing stats file, False otherwise.
     """
-    for _ in iter_paths(path_glob):
+    for _ in iter_paths(path_glob, versions):
         return True
     return False
 
 
-def iter_paths(path_glob: PT, b_min: int = 0, b_max: int = -1) -> Generator[PT, None, None]:
-    """Iterates existing stats file paths based on the glob and the path type.
+def iter_predecessors(path_glob: PT, top: int = 0) -> Generator[list[PT], None, None]:
+    """Iterate upmost `top` previous minor versions with files matching the given glob.
+
+    The method searches for stats files matching the glob in minor versions that precede the
+    minor version associated with the `path_glob`. For each such minor version that contains at
+    least one matching file, a collection of all files matching the glob will be provided.
+
+    If `top` has a positive value, at most `top` preceding minor versions with matching files
+    will be iterated.
+
+    :param path_glob: a glob pattern to search for.
+    :param top: the maximum number of predecessor versions to iterate.
+
+    :return: collections of paths matching the glob in preceding minor versions.
+    """
+    cnt = 0
+    # Iterate the versions previous to the one found in the glob
+    versions = list_stat_versions(path_glob.minor_version)
+    if not versions:
+        return
+    for ver_hash, _ in versions[1:]:
+        ver_paths = list(iter_paths(path_glob, versions=ver_hash))
+        if ver_paths:
+            cnt += 1
+            yield ver_paths
+            # Stop the iteration if we reached the number of requested predecessors
+            if 0 < top <= cnt:
+                return
+
+
+def iter_paths(
+        path_glob: PT, versions: VersionsLookup = None, b_min: int = 0, b_max: int = -1
+) -> Generator[PT, None, None]:
+    """Iterates existing stats file paths conforming to the glob, path type and minor versions.
+
+    If `versions` are not specified, the minor version in the path glob will be used.
+    Otherwise, only the specified `versions` will be used (the path glob version will be ignored).
 
     Only valid paths corresponding to the generic path type AND the glob pattern will be iterated.
     E.g., when path_glob is an instance of a class `MyStats` that is a subclass of `StatsFile`,
@@ -364,32 +412,36 @@ def iter_paths(path_glob: PT, b_min: int = 0, b_max: int = -1) -> Generator[PT, 
     IteratorBoundsException is raised.
 
     :param path_glob: a glob pattern to filter the iterated paths.
+    :param versions: if set, only file paths in the versions will be iterated.
     :param b_min: the minimum number of elements that should be present in the iterator.
     :param b_max: the maximum number of elements that should be present in the iterator.
 
     :return: a generator of paths matching the glob pattern and the path type format.
     """
-    minor_version = path_glob.minor_version
-    minor_dir = Path(find_minor_stats_directory(minor_version)[1])
+    version_iter: VersionsIterable = _unify_versions(versions, path_glob.minor_version)
     cnt = 0
-    for file in minor_dir.glob(path_glob.as_glob()):
-        try:
-            # The constructor takes care of invalid paths.
-            valid_path = path_glob.__class__.from_path(file.resolve(), minor_version)
-            cnt += 1
-            if 0 < b_max < cnt:
-                # Upper bound set and too many files found
-                raise exceptions.IteratorBoundsException(b_min, b_max, cnt)
-            yield valid_path
-        except InvalidStatsPathException:
-            pass
+    # Iterate all of the versions
+    for minor_version in version_iter:
+        minor_dir = Path(find_minor_stats_directory(minor_version)[1])
+        # Iterate all files in the version
+        for file in minor_dir.glob(path_glob.as_glob()):
+            try:
+                # The constructor takes care of invalid paths.
+                valid_path = path_glob.__class__.from_path(file.resolve(), minor_version)
+                cnt += 1
+                if 0 < b_max < cnt:
+                    # Upper bound set and too many files found
+                    raise exceptions.IteratorBoundsException(b_min, b_max, cnt)
+                yield valid_path
+            except InvalidStatsPathException:
+                pass
     if cnt < b_min:
         # Lower bound set and not enough files found
         raise exceptions.IteratorBoundsException(b_min, b_max, cnt)
 
 
 def iter_files(
-        path_glob: PT, b_min: int = 0, b_max: int = -1
+        path_glob: PT, versions: VersionsLookup = None, b_min: int = 0, b_max: int = -1
 ) -> Generator[StatsFile[PT], None, None]:
     """Iterates existing stats files based on the glob and the path type.
 
@@ -397,12 +449,38 @@ def iter_files(
     paths directly to the StatsFile objects.
 
     :param path_glob: a glob pattern to filter the iterated paths.
+    :param versions: if set, only files in the versions will be iterated.
     :param b_min: the minimum number of elements that should be present in the iterator.
     :param b_max: the maximum number of elements that should be present in the iterator.
 
     :return: a generator of StatsFiles matching the glob pattern and the path type format.
     """
-    yield from (StatsFile(path) for path in iter_paths(path_glob, b_min, b_max))
+    yield from (StatsFile(path) for path in iter_paths(path_glob, versions, b_min, b_max))
+
+
+def _unify_versions(versions: VersionsLookup, path_version: str | None) -> VersionsIterable:
+    """ Unify the minor versions type so that the versions can be correctly iterated.
+
+    In general, the minor versions can be specified as:
+     1) None: refers to the `path_version` if specified, otherwise refers to HEAD,
+     2) single string representing a single minor version
+     3) any string iterable (sequence, iterator, ...)
+
+    The unification process makes sure that the versions are always a correct iterable, e.g.,
+    that we don't iterate over the characters in the minor version string.
+
+    :param versions: the versions to iterate.
+    :param path_version: the stats path version.
+
+    :return: correct iterable of minor versions that can be iterated in a loop.
+    """
+    if versions is None:
+        if path_version is None:
+            return [vcs.get_minor_head()]
+        return [path_version]
+    if isinstance(versions, str):
+        return [versions]
+    return versions
 
 
 def build_stats_filename_as_profile_source(profile, ignore_timestamp, minor_version=None):
