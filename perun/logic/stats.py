@@ -297,6 +297,11 @@ class StatsFile(Generic[PT]):
 
         :param filepath: a StatsPath (or its subclass) instance.
         """
+        if filepath.absolute.exists() and not filepath.absolute.is_file():
+            # Stats path used in an actual StatsFile must be a regular file path
+            raise InvalidStatsPathException(
+                f"The stats file path {filepath.relative} does not point to a regular file!"
+            )
         self.filepath: PT = filepath
 
     def exist(self) -> bool:
@@ -305,6 +310,25 @@ class StatsFile(Generic[PT]):
         :return: True if the path corresponds to an existing file, False otherwise.
         """
         return self.filepath.absolute.exists()
+
+    def delete(self) -> None:
+        """Remove the StatsFile (if it exists) and empty directories leading up to the file.
+
+        E.g., for a stats file path ./some_dir/another_dir/file.bz2 (relative to the minor version
+        directory), the method deletes the file.bz2 and then both `another_dir` and `some_dir` if
+        they become empty. If the minor version directory becomes empty as a result of the file
+        deletion, it will also be deleted.
+        """
+        self.filepath.absolute.unlink(missing_ok=True)
+        try:
+            # Recursively remove empty directories (up to the <minor version dir>)
+            dir_path = self.filepath.relative.parent
+            while dir_path != '.':
+                dir_path.rmdir()
+                dir_path = dir_path.parent
+            delete_version_dirs([self.filepath.minor_version], True)
+        except OSError:
+            return
 
     @overload
     def open(self, mode: FileTextModes, **bz2_kwargs: Any) -> TextIO:
