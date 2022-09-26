@@ -168,6 +168,18 @@ class StatsPath:
         self._relpath: Path = filepath.relative_to(minor_dir)
         self._version: str | None = minor_version
 
+    def __eq__(self, other: object) -> bool:
+        """An equivalence operator. Two stats paths are considered equal if their absolute paths
+        are the same.
+
+        :param other: the other comparison operand.
+
+        :return: True if the stats paths are the same, False otherwise.
+        """
+        if not isinstance(other, StatsPath):
+            return NotImplemented
+        return self.absolute == other.absolute
+
     @classmethod
     def from_path(cls: Type[PT], path: Path, minor_version: str | None) -> PT:
         """Constructs a StatsPath (or its subclass) from a Path object, if possible.
@@ -303,6 +315,18 @@ class StatsFile(Generic[PT]):
                 f"The stats file path {filepath.relative} does not point to a regular file!"
             )
         self.filepath: PT = filepath
+
+    def __eq__(self, other: object) -> bool:
+        """An equivalence operator. Two stats files are considered equal if their stats paths
+        are the same.
+
+        :param other: the other comparison operand.
+
+        :return: True if the stats files are the same, False otherwise.
+        """
+        if not isinstance(other, StatsFile):
+            return NotImplemented
+        return self.filepath == other.filepath
 
     def exist(self) -> bool:
         """Checks whether a stats file corresponding to the given path exists.
