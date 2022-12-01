@@ -42,7 +42,7 @@ Glossary:
         instead tracks which layers were modified and performs the recalculation only when needed.
 """
 from __future__ import annotations
-from typing import Literal, Iterator, AbstractSet, Optional
+from typing import Literal, Iterator, AbstractSet, Optional, Collection
 
 from enum import Enum
 
@@ -315,3 +315,158 @@ class CGModificationTracker:
                     yield sorted(list(required))[0], None
                 else:
                     return
+
+
+class CGElementLayers:
+    """A representation of layers metadata for call graph (CG) elements (node and edges).
+
+    Specifically in this class, optimization layers cannot be present in the metadata without the
+    Dynamic layer. I.e., adding an optimization layer always adds the Dynamic layer unless it was
+    already present. This is intentional to provide consistent and correct representation of CG
+    element membership to different flavours.
+
+    :ivar _flavours: a collection of flavour layers associated with the CG element.
+    :ivar _opts: a collection of optimization layers associated with the CG element.
+    """
+    __slots__ = '_flavours', '_opts'
+
+    def __init__(self, flavours: Collection[CGFlavour], opts: Collection[str] | None) -> None:
+        """Initializer.
+
+        :param flavours: a collection of CG element flavours.
+        :param opts: a collection of optimization IDs associated with the CG element.
+        """
+        # We are deliberately using a string to achieve less memory overhead here.
+        self._flavours: str = ''.join(flavour.value for flavour in flavours)
+        if isinstance(opts, str):
+            opts = [opts]
+        self._opts: set[str] | None = None if opts is None else set(opts)
+
+    def __contains__(self, item: CGLayerInput) -> bool:
+        """Membership test of a layer.
+
+        The left operand is expected to be a layer specification, where each element (flavour and
+        opt) is optional.
+
+        :param item: the layer specification (flavour and/or optimization ID).
+
+        :return: True if the specified layer is associated with the CG element, False otherwise.
+        """
+        flavour, opt = item
+        if flavour is None and opt is None:
+            return True
+        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
+            return self._opts is not None and opt in self._opts
+        if flavour is not None:
+            return flavour.value in self._flavours
+        return False
+
+    def __bool__(self) -> bool:
+        """Emptiness test.
+
+        The CG element layer metadata are considered to be empty when there are no flavours
+        associated with it. We don't check the optimization as the presence of any optimization is
+        mandated by the presence of the Dynamic flavour.
+
+        :return: True when the metadata are not empty, False otherwise.
+        """
+        return bool(self.flavours)
+
+    @property
+    def layers(self) -> Iterator[CGLayer]:
+        """Provide the layers that are associated with the CG element.
+
+        Optimization layers are provided with a Dynamic flavour.
+
+        :return: an iterator of CG element layers.
+        """
+        for char in self.flavours:
+            yield CGFlavour(char), None
+        if self._opts is not None:
+            for opt in self._opts:
+                yield CGFlavour.DYNAMIC, opt
+
+    @property
+    def flavours(self) -> set[CGFlavour]:
+        """Provide the flavours associated with the CG element.
+
+        :return: the CG element flavours.
+        """
+        return {CGFlavour(char) for char in self.flavours}
+
+    @property
+    def optimizations(self) -> Iterator[str]:
+        """Provide the optimizations associated with the CG element.
+
+        :return: an iterator of CG element optimizations.
+        """
+        if self._opts is not None:
+            yield from self._opts
+
+    def supports_any(
+            self, flavours: AbstractSet[CGFlavour] | None, opts: AbstractSet[str] | None
+    ) -> bool:
+        """Check whether the CG element is associated with at least one flavour+opt combination.
+
+        If any of the parameter is set to None, it is automatically resolved as satisfying the
+        check. Hence, supplying (None, None) will result in True.
+
+        :param flavours: a collection of flavours to check.
+        :param opts: a collection of optimizations to check.
+
+        :return: True if at least one combination is found, False otherwise.
+        """
+        # Checks that at least one flavour AND at least one opt (supplied as args) is supported
+        any_opt = opts is None or (self._opts is not None and bool(self._opts & opts))
+        any_flavour = flavours is None or bool(self.flavours & flavours)
+        return any_opt and any_flavour
+
+    def add(self, tracker: CGModificationTracker, layer: CGLayerInput) -> None:
+        """Adds a new layer to the CG element metadata.
+
+        :param tracker: the CG modification tracker.
+        :param layer: specification of the layer to add.
+        """
+        flavour, opt = layer
+        # Optimization layer
+        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
+            if self._opts is None:
+                self._opts = set()
+            if opt not in self._opts:
+                self._opts.add(opt)
+                tracker.register_o(opt)
+            flavour = CGFlavour.DYNAMIC
+        # Flavour layer
+        if flavour is not None and flavour.value not in self.flavours:
+            self._flavours += flavour.value
+            tracker.register_f(flavour)
+
+    def remove(self, tracker: CGModificationTracker, layer: CGLayerInput) -> None:
+        """Remove a layer from the CG element metadata.
+
+        :param tracker: the CG modification tracker.
+        :param layer: specification of the layer to remove.
+        """
+        flavour, opt = layer
+        # We are removing only an optimization record. No change in the structure of the graph
+        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
+            if self._opts is not None and opt in self._opts:
+                self._opts.remove(opt)
+                tracker.register_o(opt)
+            if not self._opts:
+                self._opts = None
+        # We are removing a flavour
+        elif flavour is not None and flavour.value in self.flavours:
+            self._flavours = self._flavours.replace(flavour.value, "")
+            # When dynamic flavour is removed, the optimizations are removed as well
+            if flavour == CGFlavour.DYNAMIC and self._opts is not None:
+                tracker.register_o(*self._opts)
+                self._opts = None
+            tracker.register_f(flavour)
+        # We are completely removing an element (node or edge) from the graph
+        elif flavour is None:
+            tracker.register_f(*{CGFlavour(char) for char in self._flavours})
+            self._flavours = ""
+            if self._opts is not None:
+                tracker.register_o(*self._opts)
+                self._opts = None
