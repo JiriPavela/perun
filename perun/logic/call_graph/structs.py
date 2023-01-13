@@ -42,9 +42,11 @@ Glossary:
         instead tracks which layers were modified and performs the recalculation only when needed.
 """
 from __future__ import annotations
-from typing import Literal, Iterator, AbstractSet, Optional, Collection
+from typing import Literal, Iterator, AbstractSet, Optional, Collection, Union, overload
 
 from enum import Enum
+
+import networkx as nx
 
 from perun.utils.structs import OrderedEnum
 
@@ -54,6 +56,10 @@ ValidStates = Literal['c', 'd', '*']
 # A representation of a CG layer. The Input variant facilitates more lenient input.
 CGLayer = tuple["CGFlavour", Optional[str]]
 CGLayerInput = tuple[Optional["CGFlavour"], Optional[str]]
+# Dynamic CG entry points (i.e., top-level function of a, possibly optimized, profiling run)
+# Optimization ID or None for unoptimized -> Set of reported entry points
+CGDynEntryPoints = dict[Union[str, None], set[str]]
+
 
 # Timestamp format used for the CG version stats files
 TIMESTAMP_FMT = '%Y-%m-%d-%H-%M-%S'
@@ -122,6 +128,9 @@ _CGF_CHANGE_MAP: dict[CGFlavour, set[CGFlavour]] = {
     CGFlavour.DYNAMIC: {CGFlavour.MIXED},
     CGFlavour.MIXED: set()
 }
+
+
+CGFlavourLiterals = Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED, CGFlavour.DYNAMIC]
 
 
 class CGExtractor(Enum):
@@ -470,3 +479,198 @@ class CGElementLayers:
             if self._opts is not None:
                 tracker.register_o(*self._opts)
                 self._opts = None
+
+
+class CGEntryPoints:
+    """A representation of call graph entry point(s).
+
+    Call graph entry point is a node representing the program's top-level function, e.g., the 'main'
+    function for C/C++ (if we ignore the libc functions such as _start or _init). In general, entry
+    points are nodes where graph traversals begin.
+
+    Our representation of call graph can have at most one static entry point and multiple dynamic
+    entry points. The static entry point is expected to be obtained from the call graph extraction
+    or reconstruction tool, and is the same for RAW, STATIC and MIXED flavours. The dynamic entry
+    points are obtained from dynamic profiling runs and can be further attributed to different
+    optimization runs.
+
+    :ivar _graph_ref: a reference to the call graph object.
+    :ivar _static: the RAW, STATIC and MIXED entry point.
+    :ivar _dynamic: a mapping of dynamic optimization run -> collection of entry points.
+    :ivar _dynamic_rev: a reverse mapping of dynamic entry point to optimization runs.
+    """
+    # TODO: consider creating a new container representing mapping + reverse mapping.
+    __slots__ = '_graph_ref', '_static', '_dynamic', '_dynamic_rev'
+
+    def __init__(
+            self, graph_ref: nx.DiGraph, static: str | None = None,
+            dynamic: CGDynEntryPoints | None = None
+    ) -> None:
+        """Initializer.
+
+        :param graph_ref: a reference to the call graph object.
+        :param static: the RAW, STATIC and MIXED entry point.
+        :param dynamic: a mapping of dynamic optimization run (None for unoptimized run)
+                        -> collection of entry points.
+        """
+        self._graph_ref: nx.DiGraph = graph_ref
+        self._static: str | None = static
+        # opt run or unoptimized (None) -> set of entry points
+        self._dynamic: CGDynEntryPoints = dynamic if dynamic is not None else {}
+        # entry point -> set of opts
+        self._dynamic_rev: dict[str, set[str | None]] = {}
+        # Initialize the dynamic entry points reverse mapping
+        for opt_name, entry_points in self._dynamic.items():
+            for entry_pt in entry_points:
+                self._dynamic_rev.setdefault(entry_pt, set()).add(opt_name)
+
+    def __contains__(self, entry_point: str) -> bool:
+        """Membership test.
+
+        Check if the provided entry point is registered as either static or dynamic point.
+
+        :param entry_point: the name of the call graph entry point (function).
+
+        :return: True if the function is registered as an entry point, False otherwise.
+        """
+        return entry_point == self._static or entry_point in self._dynamic_rev
+
+    @overload
+    def get_entry_points(
+            self, layer: tuple[Literal[CGFlavour.DYNAMIC] | None, str | None]
+    ) -> set[str] | None:
+        ...
+
+    @overload
+    def get_entry_points(
+            self,
+            layer: tuple[Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED], str | None]
+    ) -> str | None:
+        ...
+
+    @overload
+    def get_entry_points(
+            self, layer: tuple[CGFlavourLiterals | None, str | None]
+    ) -> set[str] | str | None:
+        ...
+
+    def get_entry_points(self, layer: CGLayerInput) -> set[str] | str | None:
+        """Retrieve entry point(s) for the given CG layer.
+
+        :param layer: a specification of the CG layer for which to obtain the entry point(s).
+
+        :return: the entry point(s) registered for the layer or None if no entry point is currently
+                 assigned to the requested layer.
+        """
+        flavour, opt = layer
+        # Get all existing entry points
+        if flavour is None and opt is None:
+            all_points = set.union(*self._dynamic.values())
+            if self._static is not None:
+                all_points.add(self._static)
+            return all_points
+        # Get entry points only for a specific optimization run
+        if flavour in (None, CGFlavour.DYNAMIC) and opt is not None:
+            return self._dynamic.get(opt, None)
+        # Get entry points for dynamic flavour. If none, use entry points from all opt runs.
+        if flavour == CGFlavour.DYNAMIC:
+            dynamic_points = self._dynamic.get(opt, None)
+            # No unoptimized dynamic entry points. Use optimized ones
+            if not dynamic_points:
+                dynamic_points = set.union(*self._dynamic.values())
+            return dynamic_points
+        # Get the common entry point for raw, static and mixed
+        return self._static
+
+    def add(self, entry_point: str, layer: CGLayerInput) -> bool:
+        """Register new entry point for the given layer.
+
+        If the layer supports only a single entry point, the currently registered entry point will
+        be overwritten. Otherwise, for dynamic (optimized) layer, the point will be added to the
+        collection of entry points.
+
+        :param entry_point: the name of the call graph entry point (function).
+        :param layer: the layer associated with the entry point.
+
+        :return: True if the entry point was registered successfully, False otherwise.
+        """
+        if entry_point not in self._graph_ref.nodes:
+            return False
+        flavour, opt = layer
+        # Static entry point, also covers raw and mixed flavours
+        if flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED):
+            self._static = entry_point
+        else:
+            self._dynamic.setdefault(opt, set()).add(entry_point)
+            self._dynamic_rev.setdefault(entry_point, set()).add(opt)
+        return True
+
+    def remove(self, entry_point: str, layer: CGLayerInput) -> None:
+        """Unregister an entry point for the given layer, if it exists.
+
+        :param entry_point: the name of the call graph entry point (function).
+        :param layer: the layer associated with the entry point.
+        """
+        if entry_point not in self:
+            return
+        flavour, opt = layer
+        # The node has been completely removed
+        # Remove all references to it regardless of the flavour or opt
+        if entry_point not in self._graph_ref.nodes:
+            if entry_point == self._static:
+                self._static = None
+            if entry_point in self._dynamic_rev:
+                self._remove_dynamic(entry_point, *self._dynamic_rev[entry_point])
+        # The removal targets only a specific flavour and optionally an optimization run
+        elif flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED) and \
+                entry_point == self._static:
+            # Remove the static entry point if no more relevant flavours are associated with it
+            if not {CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED} & \
+                   self._graph_ref.nodes[entry_point]['meta'].flavours:
+                self._static = None
+        # Remove dynamic or optimization entry point
+        elif flavour == CGFlavour.DYNAMIC or (flavour is None and opt is not None):
+            self._remove_dynamic(entry_point, opt)
+
+    @property
+    def flavours(self) -> set[CGFlavour]:
+        """Retrieve the flavours that have registered entry point(s).
+
+        :return: the set of flavours with known entry points.
+        """
+        supported = set()
+        if self._static is not None:
+            # We ignore the Dynamic flavour here - it is determined by the presence or absence of
+            # dynamic entry points
+            supported = self._graph_ref.nodes[self._static]['meta'].flavours - {CGFlavour.DYNAMIC}
+        if self._dynamic:
+            supported.add(CGFlavour.DYNAMIC)
+        return supported
+
+    @property
+    def optimizations(self) -> set[str]:
+        """Retrieve the optimization runs that have registered entry point(s).
+
+        :return: the set of optimization runs with known entry points.
+        """
+        return {opt_name for opt_name in self._dynamic if opt_name is not None}
+
+    def _remove_dynamic(self, entry_point: str, *opts: str | None) -> None:
+        """Remove dynamic entry point either completely or only for the specified optimization runs.
+
+        :param entry_point: the name of the call graph entry point (function).
+        :param opts: optimization runs for which to remove the entry point or None for unoptimized
+                     dynamic run.
+        """
+        for opt in opts:
+            try:
+                self._dynamic[opt].discard(entry_point)
+                if not self._dynamic[opt]:
+                    # The optimization run has no entry points left
+                    del self._dynamic[opt]
+                self._dynamic_rev[entry_point].discard(opt)
+            except KeyError:
+                continue
+        if entry_point in self._dynamic_rev and not self._dynamic_rev[entry_point]:
+            # The entry point is no longer associated with any run.
+            del self._dynamic_rev[entry_point]
