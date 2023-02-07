@@ -42,17 +42,19 @@ Glossary:
         instead tracks which layers were modified and performs the recalculation only when needed.
 """
 from __future__ import annotations
-from typing import Literal, Iterator, AbstractSet, Optional, Collection, Union, overload
 
+from typing import Literal, Optional, Union, overload
+from collections.abc import Iterator, Collection, Set
 from enum import Enum
 
 import networkx as nx
 
 from perun.utils.structs import OrderedEnum
+from perun.utils.containers import InverseSetMapping
 
 
 # Specifies a set of valid CG states - the '*' is used for glob lookup patterns.
-ValidStates = Literal['c', 'd', '*']
+ValidStates = Literal["c", "d", "*"]
 # A representation of a CG layer. The Input variant facilitates more lenient input.
 CGLayer = tuple["CGFlavour", Optional[str]]
 CGLayerInput = tuple[Optional["CGFlavour"], Optional[str]]
@@ -62,7 +64,7 @@ CGDynEntryPoints = dict[Union[str, None], set[str]]
 
 
 # Timestamp format used for the CG version stats files
-TIMESTAMP_FMT = '%Y-%m-%d-%H-%M-%S'
+TIMESTAMP_FMT = "%Y-%m-%d-%H-%M-%S"
 
 
 class VersionState(Enum):
@@ -71,8 +73,9 @@ class VersionState(Enum):
     The Call graph version state can be either dirty or clean, depending on whether the files
     used for call graph extraction were reported as changed by the VCS.
     """
-    CLEAN = 'c'
-    DIRTY = 'd'
+
+    CLEAN = "c"
+    DIRTY = "d"
 
 
 class CGFlavour(OrderedEnum):
@@ -84,10 +87,11 @@ class CGFlavour(OrderedEnum):
      - DYNAMIC flavour represents call relation data obtained from possibly multiple profiling runs.
      - MIXED flavour represents a merge of RAW and DYNAMIC flavours.
     """
-    RAW = 'r'
-    STATIC = 's'
-    DYNAMIC = 'd'
-    MIXED = 'm'
+
+    RAW = "r"
+    STATIC = "s"
+    DYNAMIC = "d"
+    MIXED = "m"
 
     def dep_requires(self) -> set[CGFlavour]:
         """Obtains flavours that this flavour depends on.
@@ -118,7 +122,7 @@ _CGF_REQ_MAP: dict[CGFlavour, set[CGFlavour]] = {
     CGFlavour.RAW: set(),
     CGFlavour.STATIC: {CGFlavour.RAW},
     CGFlavour.DYNAMIC: {CGFlavour.DYNAMIC},  # Dynamic flavour iteratively builds on itself
-    CGFlavour.MIXED: {CGFlavour.RAW, CGFlavour.DYNAMIC}
+    CGFlavour.MIXED: {CGFlavour.RAW, CGFlavour.DYNAMIC},
 }
 
 # flavour -> {depend}
@@ -126,7 +130,7 @@ _CGF_CHANGE_MAP: dict[CGFlavour, set[CGFlavour]] = {
     CGFlavour.RAW: {CGFlavour.STATIC, CGFlavour.MIXED},
     CGFlavour.STATIC: set(),
     CGFlavour.DYNAMIC: {CGFlavour.MIXED},
-    CGFlavour.MIXED: set()
+    CGFlavour.MIXED: set(),
 }
 
 
@@ -135,7 +139,8 @@ CGFlavourLiterals = Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED, CG
 
 class CGExtractor(Enum):
     """An enumeration of supported call graph extraction tools."""
-    ANGR = 'a'
+
+    ANGR = "a"
 
 
 class CGModificationTracker:
@@ -148,7 +153,8 @@ class CGModificationTracker:
     :ivar _flavours: a collection of tracked flavours modifications
     :ivar _opts: a collection of tracked optimization modifications
     """
-    __slots__ = '_flavours', '_opts'
+
+    __slots__ = "_flavours", "_opts"
 
     def __init__(self) -> None:
         """Initializer.
@@ -247,9 +253,7 @@ class CGModificationTracker:
             self._flavours.discard(flavour)
             self._flavours |= flavour.dep_changes()
 
-    def next(
-            self, flavour: CGFlavour | None, opts: AbstractSet[str] | None
-    ) -> Iterator[CGLayer]:
+    def next(self, flavour: CGFlavour | None, opts: Set[str] | None) -> Iterator[CGLayer]:
         """Provide the next best layer to recalculate in order to obtain the specified layer.
 
         Here specifically, the layer can actually be specified as flavour and (optionally) a
@@ -337,7 +341,8 @@ class CGElementLayers:
     :ivar _flavours: a collection of flavour layers associated with the CG element.
     :ivar _opts: a collection of optimization layers associated with the CG element.
     """
-    __slots__ = '_flavours', '_opts'
+
+    __slots__ = "_flavours", "_opts"
 
     def __init__(self, flavours: Collection[CGFlavour], opts: Collection[str] | None) -> None:
         """Initializer.
@@ -346,7 +351,7 @@ class CGElementLayers:
         :param opts: a collection of optimization IDs associated with the CG element.
         """
         # We are deliberately using a string to achieve less memory overhead here.
-        self._flavours: str = ''.join(flavour.value for flavour in flavours)
+        self._flavours: str = "".join(flavour.value for flavour in flavours)
         if isinstance(opts, str):
             opts = [opts]
         self._opts: set[str] | None = None if opts is None else set(opts)
@@ -412,9 +417,7 @@ class CGElementLayers:
         if self._opts is not None:
             yield from self._opts
 
-    def supports_any(
-            self, flavours: AbstractSet[CGFlavour] | None, opts: AbstractSet[str] | None
-    ) -> bool:
+    def supports_any(self, flavours: Set[CGFlavour] | None, opts: Set[str] | None) -> bool:
         """Check whether the CG element is associated with at least one flavour+opt combination.
 
         If any of the parameter is set to None, it is automatically resolved as satisfying the
@@ -496,15 +499,16 @@ class CGEntryPoints:
 
     :ivar _graph_ref: a reference to the call graph object.
     :ivar _static: the RAW, STATIC and MIXED entry point.
-    :ivar _dynamic: a mapping of dynamic optimization run -> collection of entry points.
-    :ivar _dynamic_rev: a reverse mapping of dynamic entry point to optimization runs.
+    :ivar _dyn: a mapping of dynamic optimization run -> collection of entry points and vice versa.
     """
-    # TODO: consider creating a new container representing mapping + reverse mapping.
-    __slots__ = '_graph_ref', '_static', '_dynamic', '_dynamic_rev'
+
+    __slots__ = "_graph_ref", "_static", "_dyn"
 
     def __init__(
-            self, graph_ref: nx.DiGraph, static: str | None = None,
-            dynamic: CGDynEntryPoints | None = None
+        self,
+        graph_ref: nx.DiGraph,
+        static: str | None = None,
+        dynamic: CGDynEntryPoints | None = None,
     ) -> None:
         """Initializer.
 
@@ -515,14 +519,9 @@ class CGEntryPoints:
         """
         self._graph_ref: nx.DiGraph = graph_ref
         self._static: str | None = static
-        # opt run or unoptimized (None) -> set of entry points
-        self._dynamic: CGDynEntryPoints = dynamic if dynamic is not None else {}
-        # entry point -> set of opts
-        self._dynamic_rev: dict[str, set[str | None]] = {}
-        # Initialize the dynamic entry points reverse mapping
-        for opt_name, entry_points in self._dynamic.items():
-            for entry_pt in entry_points:
-                self._dynamic_rev.setdefault(entry_pt, set()).add(opt_name)
+        # optimized (str) or unoptimized (None) run -> set of entry points
+        # entry point -> set of optimized (str) or unoptimized (None) runs
+        self._dyn: InverseSetMapping[str | None, str] = InverseSetMapping(dynamic)
 
     def __contains__(self, entry_point: str) -> bool:
         """Membership test.
@@ -533,24 +532,23 @@ class CGEntryPoints:
 
         :return: True if the function is registered as an entry point, False otherwise.
         """
-        return entry_point == self._static or entry_point in self._dynamic_rev
+        return entry_point == self._static or self._dyn.contains_inverse(entry_point)
 
     @overload
     def get_entry_points(
-            self, layer: tuple[Literal[CGFlavour.DYNAMIC] | None, str | None]
+        self, layer: tuple[Literal[CGFlavour.DYNAMIC] | None, str | None]
     ) -> set[str] | None:
         ...
 
     @overload
     def get_entry_points(
-            self,
-            layer: tuple[Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED], str | None]
+        self, layer: tuple[Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED], str | None]
     ) -> str | None:
         ...
 
     @overload
     def get_entry_points(
-            self, layer: tuple[CGFlavourLiterals | None, str | None]
+        self, layer: tuple[CGFlavourLiterals | None, str | None]
     ) -> set[str] | str | None:
         ...
 
@@ -565,19 +563,19 @@ class CGEntryPoints:
         flavour, opt = layer
         # Get all existing entry points
         if flavour is None and opt is None:
-            all_points = set.union(*self._dynamic.values())
+            all_points = set(self._dyn.keys(inverse=True))
             if self._static is not None:
                 all_points.add(self._static)
             return all_points
         # Get entry points only for a specific optimization run
         if flavour in (None, CGFlavour.DYNAMIC) and opt is not None:
-            return self._dynamic.get(opt, None)
+            return self._dyn.get(opt, None)
         # Get entry points for dynamic flavour. If none, use entry points from all opt runs.
         if flavour == CGFlavour.DYNAMIC:
-            dynamic_points = self._dynamic.get(opt, None)
+            dynamic_points = self._dyn.get(opt, None)
             # No unoptimized dynamic entry points. Use optimized ones
             if not dynamic_points:
-                dynamic_points = set.union(*self._dynamic.values())
+                dynamic_points = set(self._dyn.keys(inverse=True))
             return dynamic_points
         # Get the common entry point for raw, static and mixed
         return self._static
@@ -601,8 +599,7 @@ class CGEntryPoints:
         if flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED):
             self._static = entry_point
         else:
-            self._dynamic.setdefault(opt, set()).add(entry_point)
-            self._dynamic_rev.setdefault(entry_point, set()).add(opt)
+            self._dyn.add(opt, entry_point)
         return True
 
     def remove(self, entry_point: str, layer: CGLayerInput) -> None:
@@ -619,18 +616,22 @@ class CGEntryPoints:
         if entry_point not in self._graph_ref.nodes:
             if entry_point == self._static:
                 self._static = None
-            if entry_point in self._dynamic_rev:
-                self._remove_dynamic(entry_point, *self._dynamic_rev[entry_point])
+            if self._dyn.contains_inverse(entry_point):
+                self._dyn.delitem_inverse(entry_point)
         # The removal targets only a specific flavour and optionally an optimization run
-        elif flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED) and \
-                entry_point == self._static:
+        elif (
+            flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED)
+            and entry_point == self._static
+        ):
             # Remove the static entry point if no more relevant flavours are associated with it
-            if not {CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED} & \
-                   self._graph_ref.nodes[entry_point]['meta'].flavours:
+            if (
+                not {CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED}
+                & self._graph_ref.nodes[entry_point]["meta"].flavours
+            ):
                 self._static = None
         # Remove dynamic or optimization entry point
         elif flavour == CGFlavour.DYNAMIC or (flavour is None and opt is not None):
-            self._remove_dynamic(entry_point, opt)
+            self._dyn.remove(opt, entry_point)
 
     @property
     def flavours(self) -> set[CGFlavour]:
@@ -642,8 +643,8 @@ class CGEntryPoints:
         if self._static is not None:
             # We ignore the Dynamic flavour here - it is determined by the presence or absence of
             # dynamic entry points
-            supported = self._graph_ref.nodes[self._static]['meta'].flavours - {CGFlavour.DYNAMIC}
-        if self._dynamic:
+            supported = self._graph_ref.nodes[self._static]["meta"].flavours - {CGFlavour.DYNAMIC}
+        if self._dyn:
             supported.add(CGFlavour.DYNAMIC)
         return supported
 
@@ -653,24 +654,4 @@ class CGEntryPoints:
 
         :return: the set of optimization runs with known entry points.
         """
-        return {opt_name for opt_name in self._dynamic if opt_name is not None}
-
-    def _remove_dynamic(self, entry_point: str, *opts: str | None) -> None:
-        """Remove dynamic entry point either completely or only for the specified optimization runs.
-
-        :param entry_point: the name of the call graph entry point (function).
-        :param opts: optimization runs for which to remove the entry point or None for unoptimized
-                     dynamic run.
-        """
-        for opt in opts:
-            try:
-                self._dynamic[opt].discard(entry_point)
-                if not self._dynamic[opt]:
-                    # The optimization run has no entry points left
-                    del self._dynamic[opt]
-                self._dynamic_rev[entry_point].discard(opt)
-            except KeyError:
-                continue
-        if entry_point in self._dynamic_rev and not self._dynamic_rev[entry_point]:
-            # The entry point is no longer associated with any run.
-            del self._dynamic_rev[entry_point]
+        return {opt_name for opt_name in self._dyn if opt_name is not None}
