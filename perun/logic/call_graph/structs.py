@@ -4,47 +4,49 @@ used by other CG modules.
 # TODO: Move to a more fitting file in the end. Perhaps the __init__.py or graph.py.
 Glossary:
     - CG flavour:
-        In general, the obtained call graph of a program may not be 100% correct. The precision of
-        a CG depends on the method of extraction or reconstruction. E.g., the dynamic call graph
-        will clearly contain only truly reachable edges and nodes, but it will very likely be
-        incomplete. On the other hand, a call graph obtained from static analysis tools may be more
-        general, but over-approximate too much or completely miss some dynamic dispatch calls.
-        Hence, we want to distinguish those different "flavours" of a call graph and be able to
-        manipulate them individually and, to a certain degree, independently. Flavours thus describe
-        the type of a call graph based on how it was obtained.
+        In general, the obtained call graph of a program may not be 100% correct. The precision
+        of a CG depends on the method of extraction or reconstruction. E.g., the dynamic call
+        graph will clearly contain only truly reachable edges and nodes, but it will very likely
+        be incomplete. On the other hand, a call graph obtained from static analysis tools may be
+        more general, but over-approximate too much or completely miss some dynamic dispatch
+        calls. Hence, we want to distinguish those different "flavours" of a call graph and be
+        able to manipulate them individually and, to a certain degree, independently. Flavours
+        thus describe the type of a call graph based on how it was obtained.
 
     - Optimization:
         Also sometimes called 'opt', 'opts' or 'optimization run(s)'. Optimizations, in the context
         of call graphs, refer to profiling runs that are not monitoring all of the possible function
         calls within a program, but only a selected subset of available functions. Call graphs
         obtained from optimization runs are generally less precise than call graphs obtained from
-        a full profiling run, and are thus considered as a special type of DYNAMIC flavour call
-        graphs. Optimizations can have different configurations and are distinguished using
+        a full profiling run, and are thus considered as a special type  of DYNAMIC flavour call
+        graphs. Optimizations can have different configurations and are  distinguished using
         optimization IDs.
 
     - Layer:
-        A combination of flavour and optimization(s) that induce a subgraph of the call graph.
-        As an example, the (dynamic flavour, opt_id) tuple identify nodes and edges that are
-        associated with specific dynamic optimised run(s) "opt_id", and generally form only
-        a subgraph of the original call graph. As there are multiple possible interpretations for
+        A combination of flavour and optimization(s) that induce a subgraph of the call graph. As
+        an example, the (dynamic flavour, opt_id) tuple identify nodes and edges that are
+        associated with specific dynamic optimised run(s) "opt_id", and generally form only a
+        subgraph of the original call graph. As there are multiple possible interpretations for
         some combinations, the call graph implementation imposes some rules to avoid unambiguity:
-         - (flavour == None,                 opt == None)   => The complete call graph.
-         - (flavour in (None, Dynamic),      opt != None)   => Dynamic optimization run "opt".
-         - (flavour not in (None, Dynamic),  X          )   => Flavour layer only, no optimization.
+         - (flavour == None,             opt == None)   => The complete call graph.
+         - (flavour in (None, Dynamic),  opt != None)   => Dynamic optimization run "opt".
+         - (flavour != None,             opt == X   )   => Flavour layer only, no optimization.
 
     - Call graph / layers consistency:
-        As nodes and edges may be inserted to, or removed from, the call graph, the different layers
-        may become inconsistent, i.e., produce an invalid subgraph. In the case of insertion, the
-        inconsistencies arise because certain flavours are dependent on each other (e.g., the Mixed
-        layer is constructed using the Raw and Dynamic flavours). As for deletion, deleting certain
-        edges or nodes may cause some - previously reachable - parts of a layer subgraph
-        unreachable. To avoid expensive recalculation after every minor change, the call graph
-        instead tracks which layers were modified and performs the recalculation only when needed.
+        As nodes and edges may be inserted to, or removed from, the call graph, the different
+        layers may become inconsistent, i.e., produce an invalid subgraph. In the case of
+        insertion, the inconsistencies arise because certain flavours are dependent on each other
+        (e.g., the Mixed layer is constructed using the Raw and Dynamic flavours). As for
+        deletion, deleting certain edges or nodes may cause some - previously reachable - parts
+        of a layer subgraph unreachable. To avoid expensive recalculation after every minor
+        change, the call graph instead tracks which layers were modified and performs the
+        recalculation only when needed.
 """
+
 from __future__ import annotations
 
-from typing import Literal, Optional, Union, overload
-from collections.abc import Iterator, Collection, Set
+from typing import Literal, Union
+from collections.abc import Iterator, Set, Iterable
 from enum import Enum
 
 import networkx as nx
@@ -55,12 +57,9 @@ from perun.utils.containers import InverseSetMapping
 
 # Specifies a set of valid CG states - the '*' is used for glob lookup patterns.
 ValidStates = Literal["c", "d", "*"]
-# A representation of a CG layer. The Input variant facilitates more lenient input.
-CGLayer = tuple["CGFlavour", Optional[str]]
-CGLayerInput = tuple[Optional["CGFlavour"], Optional[str]]
 # Dynamic CG entry points (i.e., top-level function of a, possibly optimized, profiling run)
-# Optimization ID or None for unoptimized -> Set of reported entry points
-CGDynEntryPoints = dict[Union[str, None], set[str]]
+# Dynamic (un)optimized layers -> set of entry points
+CGDynEntryPoints = Union[dict["CGLayer", Set[str]], Iterable[tuple["CGLayer", Set[str]]]]
 
 
 # Timestamp format used for the CG version stats files
@@ -76,6 +75,12 @@ class VersionState(Enum):
 
     CLEAN = "c"
     DIRTY = "d"
+
+
+class CGExtractor(Enum):
+    """An enumeration of supported call graph extraction tools."""
+
+    ANGR = "a"
 
 
 class CGFlavour(OrderedEnum):
@@ -108,8 +113,8 @@ class CGFlavour(OrderedEnum):
         """Determines which flavours are dependant on this one.
 
         Modifying a structure of some CG flavour F can cause inconsistencies in derived (or
-        dependant) flavours. Hence we provide a mapping of flavours that are affected by changes
-        in each flavours.
+        dependant) flavours F1, F2, ... Hence we provide a mapping of flavours that are affected
+        by changes in each flavours.
         E.g., when changing the DYNAMIC flavour, the MIXED flavour needs to change accordingly.
 
         :return: a collection of flavours depending on this one.
@@ -134,148 +139,269 @@ _CGF_CHANGE_MAP: dict[CGFlavour, set[CGFlavour]] = {
 }
 
 
-CGFlavourLiterals = Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED, CGFlavour.DYNAMIC]
+class CGLayerType(OrderedEnum):
+    """Types of CG layers.
+
+    The FLAVOUR type represents a layer consisting only of a single flavour (ignoring optimization).
+    The OPT type represents a layer consisting of dynamic flavour and an optimization.
+    The ALL type represents an abstract layer for all possible flavour and opt combinations.
+
+    The layer types are also ordered such that FLAVOUR < OPT < ALL.
+    """
+
+    FLAVOUR = 1
+    OPT = 2
+    ALL = 3
+
+    @classmethod
+    def determine(cls, flavour: CGFlavour | None, opt: str | None) -> CGLayerType:
+        """Alternative initializer that determines the layer type based on flavour and opt.
+
+        Note that the initializer is rather forgiving and invalid combinations, e.g., (RAW, "opt1"),
+        will always result in a valid type based on the following rules:
+         - (flavour == None,              opt == None)   => ALL
+         - (flavour in (None, Dynamic),   opt != None)   => OPT
+         - (flavour != None,              opt == X   )   => LAYER
+
+        :param flavour: the layer flavour.
+        :param opt: the layer optimization ID or None for an unoptimized run.
+
+        :return: a layer type object.
+        """
+        if flavour is None and opt is None:
+            return cls.ALL
+        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
+            return cls.OPT
+        # The flavour is never None here
+        return cls.FLAVOUR
 
 
-class CGExtractor(Enum):
-    """An enumeration of supported call graph extraction tools."""
+class CGLayer:
+    """A representation of CG layer.
 
-    ANGR = "a"
+    A layer identifies nodes and edges that generally form a subgraph of the entire call graph.
+    The layers represent different versions of a call graph based on either the means of extraction
+    or some properties of the graph, e.g., iterative reconstruction of the call graph across
+    multiple optimized runs of a program, or the reachability property on a call graph extracted
+    statically from a binary file.
+
+    As an example, the (flavour, opt) tuple identify nodes and edges that are associated with
+    specific dynamic optimised run(s) "opt_id", and generally form only a subgraph of the whole
+    call graph.
+
+    :ivar _flavour: the flavour associated with the layer.
+    :ivar _opt: the optimization ID associated with the layer, if any.
+    :ivar _type: the type of the layer derived from the flavour and optimization ID.
+    """
+
+    __slots__ = "_flavour", "_opt", "_type"
+
+    def __init__(self, flavour: CGFlavour | None, opt: str | None = None) -> None:
+        """Initializer.
+
+        Invalid flavour and optimization combinations will be transformed according to the layer
+        type rules so that the resulting layer object is always consistent.
+
+        :param flavour: the layer flavour.
+        :param opt: the optimization ID, if any.
+        """
+        layer_type = CGLayerType.determine(flavour, opt)
+        if layer_type == CGLayerType.OPT:
+            # Unify the two possible ways to specify flavour in optimized layer (DYNAMIC or None)
+            flavour = CGFlavour.DYNAMIC
+        else:
+            # Unoptimized layer
+            opt = None
+        self._flavour: CGFlavour | None = flavour
+        self._opt: str | None = opt
+        self._type: CGLayerType = layer_type
+
+    def __str__(self) -> str:
+        """Provide a string representation of the layer.
+
+        :return: the layer string representation.
+        """
+        return f"Layer(flavour={self._flavour}, opt={self._opt}, type={self._type.name})"
+
+    def __hash__(self) -> int:
+        """The hashing operator for layers.
+
+        The layer type is not being used for hashing as it is deterministically derived from the
+        flavour and opt. That is, two different layers with the same flavours and opts will always
+        be of the same type and hence equal.
+
+        :return: the layer hash.
+        """
+        return hash((self._flavour, self._opt))
+
+    def __eq__(self, other: object) -> bool:
+        """Equality operator.
+
+        Two layers are equal if their layers and opt are equal for reasons described in the hashing
+        operator.
+
+        :param other: the other layer.
+
+        :return: True if the layers are equal, False otherwise.
+        """
+        if not isinstance(other, CGLayer):
+            return NotImplemented
+        return self._flavour == other._flavour and self._opt == other._opt
+
+    def __lt__(self, other: object) -> bool:
+        """Less-than comparison operator.
+
+        The layer order depends on a) layer type, b) layer flavour and c) layer opt, in this exact
+        order. The actual order of different optimizations is insignificant but for the sake of
+        providing a complete ordering, the opts are compared alphabetically.
+
+        :param other: the other layer.
+
+        :return: True if this layer is less than the other, False otherwise.
+        """
+        if not isinstance(other, CGLayer):
+            return NotImplemented
+        # Different types, one of them has to have a higher priority
+        if self._type != other._type:
+            return self._type < other._type
+        # Same types
+        if self._type == CGLayerType.FLAVOUR:
+            # Compare flavours
+            # They can't be None since the type would be ALL but mypy doesn't know that
+            assert self._flavour is not None and other._flavour is not None
+            return self._flavour < other._flavour
+        if self._type == CGLayerType.OPT:
+            # We don't really care about the order of opts, so we order them alphabetically
+            assert self._opt is not None and other._opt is not None
+            return self._opt < other._opt
+        # The ALL type, it is never less than any other type
+        return False
+
+    @property
+    def flavour(self) -> CGFlavour | None:
+        """Get the flavour associated with the layer, if any.
+
+        The layer should be immutable, hence the read-only property.
+
+        :return: the layer flavour, if there is any, otherwise None.
+        """
+        return self._flavour
+
+    @property
+    def optimization(self) -> str | None:
+        """Get the optimization associated with the layer, if any.
+
+        The layer should be immutable, hence the read-only property.
+
+        :return: the layer optimization, if there is any, otherwise None.
+        """
+        return self._opt
+
+    @property
+    def type(self) -> CGLayerType:
+        """Get the layer type.
+
+        The layer should be immutable, hence the read-only property.
+
+        :return: the identified layer type.
+        """
+        return self._type
 
 
 class CGModificationTracker:
     """A Helper class for tracking modifications of CG structure.
 
-    The class tracks changes with a per-flavour and per-optimization granularity, and provides a
-    mutable iterator that automatically resolves dependencies between layers and determines the
-    order in which to safely recalculate different layers of the CG.
+    The class tracks changes made to different CG layers, and provides a stable iterator that
+    automatically resolves dependencies between layers and determines the order in which to safely
+    recalculate different layers of the CG.
 
-    :ivar _flavours: a collection of tracked flavours modifications
-    :ivar _opts: a collection of tracked optimization modifications
+    :ivar _layers: a collection of tracked layers modification.
     """
 
-    __slots__ = "_flavours", "_opts"
+    __slots__ = ["_layers"]
 
     def __init__(self) -> None:
         """Initializer.
 
-        Initially, both the flavour and optimization tracker sets are empty.
+        Initially, there are no tracked changes to any layer.
         """
-        self._flavours: set[CGFlavour] = set()
-        self._opts: set[str] = set()
+        self._layers: set[CGLayer] = set()
 
-    def __contains__(self, item: CGFlavour | str) -> bool:
-        """Membership test.
+    def __contains__(self, layer: CGLayer) -> bool:
+        """Layer membership test.
 
-        The provided item can be either a flavour or an optimization ID. The lookup will be
-        performed in both the flavour and optimization sets. Thanks to different types of flavours
-        and optimization IDs, it is guaranteed that the item can't be in both sets at the same time.
+        :param layer: the layer to test.
 
-        :param item: either a flavour or optimization ID.
-
-        :return: True if the item is tracked as a modification, False otherwise.
+        :return: True if the layer is tracked as a modification, False otherwise.
         """
-        return item in self._flavours or item in self._opts
+        return layer in self._layers
 
     def __bool__(self) -> bool:
         """Emptiness test.
 
-        The Tracker is considered empty if no layer is tracked as changed.
+        The Tracker is considered empty if there are no tracked layer changes.
 
         :return: True if the Tracker is empty, False otherwise.
         """
-        return bool(self._flavours) or bool(self._opts)
+        return bool(self._layers)
 
-    def register(self, layer: CGLayerInput) -> CGModificationTracker:
-        """Register modification of a layer.
+    def register(self, *changes: CGLayer) -> CGModificationTracker:
+        """Register modification of layers.
 
-        :param layer: the modified layer specified as a flavour and/or optimization.
+        :param changes: the modified layer(s).
 
-        :return: the Tracker object.
+        :return: the tracker object.
         """
-        flavour, opt = layer
-        if flavour is not None:
-            self._flavours.add(flavour)
-        if opt is not None:
-            self._opts.add(opt)
+        self._layers |= set(changes)
         return self
 
-    def register_f(self, *flavours: CGFlavour) -> CGModificationTracker:
-        """Register modification of multiple flavours.
-
-        :param flavours: a collection of flavours that have been modified.
-
-        :return: the Tracker object.
-        """
-        self._flavours |= set(flavours)
-        return self
-
-    def register_o(self, *opts: str | None) -> CGModificationTracker:
-        """Register modification of multiple optimization layers.
-
-        :param opts: a collection of optimization IDs that have been modified.
-
-        :return: the Tracker object.
-        """
-        self._opts |= set(opt for opt in opts if opt is not None)
-        return self
-
-    def unregister(self, *changes: CGFlavour | str | None) -> CGModificationTracker:
-        """Unregister multiple modifications.
+    def unregister(self, *changes: CGLayer) -> CGModificationTracker:
+        """Unregister layer modifications.
 
         Mark the modifications as resolved, e.g., when the layers are once again consistent.
 
-        :param changes: flavour(s) and/or optimizations that are no longer inconsistent.
+        :param changes: layers(s) that are no longer inconsistent.
 
-        :return: the Tracker object.
+        :return: the tracker object.
         """
-        self._flavours -= set(changes)
-        self._opts -= set(changes)
+        self._layers -= set(changes)
         return self
 
-    def recalculated(self, layer: CGLayerInput) -> None:
+    def recalculated(self, layer: CGLayer) -> None:
         """Register that a certain layer was recalculated and resolve layer dependencies.
 
         When a flavour layer is recalculated and made consistent again, the recalculation should
-        trigger recalculation(s) of dependant flavour layers.
+        register dependant flavour layer(s) as modified.
 
-        :param layer: the recalculated layer specified as a flavour and/or optimization.
+        :param layer: the recalculated layer.
         """
-        # Only flavour xor optimization layer can be recalculated at the same time. When
-        # recalculating optimization, the flavour may be set to DYNAMIC, but in this case, we
-        # should ignore it. Make sure to not mark both an optimization and a flavour as
-        # recalculated simultaneously
-        flavour, opt = layer
-        if opt is not None:
-            self._opts.discard(opt)
-            return
-        if flavour is not None:
-            self._flavours.discard(flavour)
-            self._flavours |= flavour.dep_changes()
+        self._layers.discard(layer)
+        if layer.type == CGLayerType.FLAVOUR:
+            assert layer.flavour is not None
+            self._layers |= {CGLayer(flv) for flv in layer.flavour.dep_changes()}
 
-    def next(self, flavour: CGFlavour | None, opts: Set[str] | None) -> Iterator[CGLayer]:
-        """Provide the next best layer to recalculate in order to obtain the specified layer.
-
-        Here specifically, the layer can actually be specified as flavour and (optionally) a
-        collection of optimization runs.
+    def next(self, layer: CGLayer) -> Iterator[CGLayer]:
+        """Get the next best layer to recalculate to get the requested layer in a consistent state.
 
         The next layer to recalculate is determined according to the tracked modifications, the
-        flavour dependencies and supplied parameters. The parameters represent the requested layer
+        flavour dependencies and the layer ordering. The parameter represent the requested layer
         and the resulting iterator provides the next best recalculation step, up to the requested
         layer itself.
 
         Example:
-            - We want to recalculate the MIXED layer of the CG:
-                self.next(CGFlavour.MIXED, None)
+            - We want to recalculate the (MIXED, None) layer of the CG:
+                self.next(CGLayer(MIXED, None))
             - The tracked modifications:
-                flavours == [CGFlavour.RAW]
-                opts == ["opt1", "opt2"]
+                layers == [CGLayer(DYNAMIC, "opt1"), CGLayer(RAW, None), CGLayer(DYNAMIC, "opt2")]
             - The iterator will provide the following layers to recalculate:
-                1. (CGFlavour.RAW, None)
-                2. (CGFlavour.MIXED, None)
+                1. CGLayer(RAW, None)
+                2. CGLayer(MIXED, None)
             - The resulting state of registered modifications after the recalculations:
-                flavours == [CGFlavour.STATIC]  # Added because of RAW layer recalculation.
-                opts == ["opt1", "opt2"]
+                layers == [
+                    CGLayer(DYNAMIC, "opt1"),
+                    CGLayer(DYNAMIC, "opt2"),
+                    CGLayer(STATIC, None)      # Added because of RAW layer recalculation.
+                ]
 
         Note that the iterator reacts to modification changes that happen during the iteration and
         will always calculate the next best step based on the current state of tracked
@@ -284,204 +410,155 @@ class CGModificationTracker:
 
         Example:
             - Given the modification state,
-                flavours == [CGFlavour.RAW]
-                opts == ["opt1", "opt2"]
+                layers == [CGLayer(DYNAMIC, "opt1"), CGLayer(RAW, None), CGLayer(DYNAMIC, "opt2")]
             - and the following sequence of calls with no recalculation in-between,
-                self.next(CGFlavour.MIXED, None)
-                self.next(CGFlavour.MIXED, None)
+                self.next(CGLayer(MIXED, None))
+                self.next(CGLayer(MIXED, None))
             - the iterator will in both cases produce the same layer to compute next:
-                1. (CGFlavour.RAW, None)
-                2. (CGFlavour.RAW, None)
+                1. CGLayer(RAW, None)
+                2. CGLayer(RAW, None)
 
-        To make the whole CG consistent, i.e., recalculate all of its inconsistent layers, set both
-        the flavour and optimization parameters to None: next(None, None).
+        To make the whole CG consistent, i.e., recalculate all of its inconsistent layers, provide
+        a layer of the ALL type.
 
-        :param flavour: the CG flavour part of the target layer to make consistent.
-        :param opts: the optimizations part of the target layer to make consistent.
+        :param layer: the requested layer.
 
         :return: an iterator of layers that should be recalculated in the next step.
         """
         while self:
-            # Process everything
-            if flavour is None and opts is None:
-                if self._flavours:
-                    yield sorted(list(self._flavours))[0], None
-                elif self._opts:
-                    # Pylint false positive here. The iterator will never be empty in this branch
-                    # pylint: disable-next=stop-iteration-return
-                    yield CGFlavour.DYNAMIC, next(iter(self._opts))
-                else:
-                    return
-            # Specific optimization
-            elif flavour in (None, CGFlavour.DYNAMIC) and opts is not None:
-                modified_opts = opts & self._opts
-                if modified_opts:
-                    # pylint: disable-next=stop-iteration-return
-                    yield CGFlavour.DYNAMIC, next(iter(modified_opts))
-                else:
-                    return
-            # Specific flavour
+            if layer.type == CGLayerType.ALL:
+                yield sorted(list(self._layers))[0]
+            elif layer.type == CGLayerType.OPT:
+                if layer in self:
+                    yield layer
             else:
-                assert flavour is not None  # Help mypy here as it can't infer it
-                required = (flavour.dep_requires() | {flavour}) & self._flavours
-                if required:
-                    yield sorted(list(required))[0], None
-                else:
+                # Flavour layer
+                assert layer.flavour is not None
+                # Find flavour layers that must be recalculated before this layer and check which
+                # of those layers are actually tracked as changed
+                required = set(CGLayer(flv) for flv in layer.flavour.dep_requires()) | {layer}
+                required &= self._layers
+                if not required:
                     return
+                yield sorted(list(required))[0]
 
 
 class CGElementLayers:
     """A representation of layers metadata for call graph (CG) elements (node and edges).
 
-    Specifically in this class, optimization layers cannot be present in the metadata without the
-    Dynamic layer. I.e., adding an optimization layer always adds the Dynamic layer unless it was
-    already present. This is intentional to provide consistent and correct representation of CG
-    element membership to different flavours.
+    Note that dynamic layers have a bit specific semantics here. Whenever a CG element is associated
+    with an OPT layer (that is, layer with dynamic flavour and optimization ID), the element is
+    automatically associated with a dynamic unoptimized layer as well. This ensures that a general
+    dynamic flavour layer (i.e., CGLayer(DYNAMIC, None)) is available even if an unoptimized run was
+    never actually executed.
 
-    :ivar _flavours: a collection of flavour layers associated with the CG element.
-    :ivar _opts: a collection of optimization layers associated with the CG element.
+    :ivar _layers: a collection of layers associated with the CG element.
     """
 
-    __slots__ = "_flavours", "_opts"
+    __slots__ = ["_layers"]
 
-    def __init__(self, flavours: Collection[CGFlavour], opts: Collection[str] | None) -> None:
+    def __init__(self, *layers: CGLayer) -> None:
         """Initializer.
 
-        :param flavours: a collection of CG element flavours.
-        :param opts: a collection of optimization IDs associated with the CG element.
+        :param layers: a collection of layers to associate with the CG element.
         """
-        # We are deliberately using a string to achieve less memory overhead here.
-        self._flavours: str = "".join(flavour.value for flavour in flavours)
-        if isinstance(opts, str):
-            opts = [opts]
-        self._opts: set[str] | None = None if opts is None else set(opts)
+        self._layers: set[CGLayer] = set(layers)
 
-    def __contains__(self, item: CGLayerInput) -> bool:
+    def __contains__(self, layer: CGLayer) -> bool:
         """Membership test of a layer.
 
-        The left operand is expected to be a layer specification, where each element (flavour and
-        opt) is optional.
+        The layer of type ALL will always be evaluated as present, thus resulting in True.
 
-        :param item: the layer specification (flavour and/or optimization ID).
+        :param layer: the layer to test.
 
         :return: True if the specified layer is associated with the CG element, False otherwise.
         """
-        flavour, opt = item
-        if flavour is None and opt is None:
+        if layer.type == CGLayerType.ALL:
             return True
-        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
-            return self._opts is not None and opt in self._opts
-        if flavour is not None:
-            return flavour.value in self._flavours
-        return False
+        return layer in self._layers
 
     def __bool__(self) -> bool:
         """Emptiness test.
 
-        The CG element layer metadata are considered to be empty when there are no flavours
-        associated with it. We don't check the optimization as the presence of any optimization is
-        mandated by the presence of the Dynamic flavour.
-
-        :return: True when the metadata are not empty, False otherwise.
+        :return: True when the metadata have at least one layer, False otherwise.
         """
-        return bool(self.flavours)
+        return bool(self._layers)
 
     @property
     def layers(self) -> Iterator[CGLayer]:
         """Provide the layers that are associated with the CG element.
 
-        Optimization layers are provided with a Dynamic flavour.
-
         :return: an iterator of CG element layers.
         """
-        for char in self.flavours:
-            yield CGFlavour(char), None
-        if self._opts is not None:
-            for opt in self._opts:
-                yield CGFlavour.DYNAMIC, opt
+        return iter(self._layers)
 
     @property
     def flavours(self) -> set[CGFlavour]:
-        """Provide the flavours associated with the CG element.
+        """Get unique layer flavours associated with the CG element.
 
         :return: the CG element flavours.
         """
-        return {CGFlavour(char) for char in self.flavours}
+        return set(layer.flavour for layer in self._layers if layer.flavour is not None)
 
     @property
     def optimizations(self) -> Iterator[str]:
-        """Provide the optimizations associated with the CG element.
+        """Get optimizations associated with the CG element.
 
         :return: an iterator of CG element optimizations.
         """
-        if self._opts is not None:
-            yield from self._opts
+        return iter(layer.optimization for layer in self._layers if layer.optimization is not None)
 
-    def supports_any(self, flavours: Set[CGFlavour] | None, opts: Set[str] | None) -> bool:
-        """Check whether the CG element is associated with at least one flavour+opt combination.
-
-        If any of the parameter is set to None, it is automatically resolved as satisfying the
-        check. Hence, supplying (None, None) will result in True.
-
-        :param flavours: a collection of flavours to check.
-        :param opts: a collection of optimizations to check.
-
-        :return: True if at least one combination is found, False otherwise.
-        """
-        # Checks that at least one flavour AND at least one opt (supplied as args) is supported
-        any_opt = opts is None or (self._opts is not None and bool(self._opts & opts))
-        any_flavour = flavours is None or bool(self.flavours & flavours)
-        return any_opt and any_flavour
-
-    def add(self, tracker: CGModificationTracker, layer: CGLayerInput) -> None:
+    def add(self, tracker: CGModificationTracker, layer: CGLayer) -> None:
         """Adds a new layer to the CG element metadata.
 
-        :param tracker: the CG modification tracker.
-        :param layer: specification of the layer to add.
-        """
-        flavour, opt = layer
-        # Optimization layer
-        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
-            if self._opts is None:
-                self._opts = set()
-            if opt not in self._opts:
-                self._opts.add(opt)
-                tracker.register_o(opt)
-            flavour = CGFlavour.DYNAMIC
-        # Flavour layer
-        if flavour is not None and flavour.value not in self.flavours:
-            self._flavours += flavour.value
-            tracker.register_f(flavour)
+        If the layer is of type OPT, a DYNAMIC flavour layer will be added automatically.
 
-    def remove(self, tracker: CGModificationTracker, layer: CGLayerInput) -> None:
+        :param tracker: the CG modification tracker.
+        :param layer: the layer to add.
+        """
+        if layer.type == CGLayerType.ALL:
+            return
+        if layer not in self:
+            self._layers.add(layer)
+            tracker.register(layer)
+            if layer.type == CGLayerType.OPT:
+                self.add(tracker, CGLayer(CGFlavour.DYNAMIC))
+
+    def remove(self, tracker: CGModificationTracker, layer: CGLayer) -> None:
         """Remove a layer from the CG element metadata.
 
         :param tracker: the CG modification tracker.
-        :param layer: specification of the layer to remove.
+        :param layer: the layer to remove.
         """
-        flavour, opt = layer
-        # We are removing only an optimization record. No change in the structure of the graph
-        if flavour in (CGFlavour.DYNAMIC, None) and opt is not None:
-            if self._opts is not None and opt in self._opts:
-                self._opts.remove(opt)
-                tracker.register_o(opt)
-            if not self._opts:
-                self._opts = None
-        # We are removing a flavour
-        elif flavour is not None and flavour.value in self.flavours:
-            self._flavours = self._flavours.replace(flavour.value, "")
-            # When dynamic flavour is removed, the optimizations are removed as well
-            if flavour == CGFlavour.DYNAMIC and self._opts is not None:
-                tracker.register_o(*self._opts)
-                self._opts = None
-            tracker.register_f(flavour)
-        # We are completely removing an element (node or edge) from the graph
-        elif flavour is None:
-            tracker.register_f(*{CGFlavour(char) for char in self._flavours})
-            self._flavours = ""
-            if self._opts is not None:
-                tracker.register_o(*self._opts)
-                self._opts = None
+        if layer.type == CGLayerType.ALL:
+            # Delete all layers
+            tracker.register(*self._layers)
+            self._layers.clear()
+        if layer.type == CGLayerType.FLAVOUR and layer.flavour == CGFlavour.DYNAMIC:
+            # Delete all dynamic layers (both optimized and unoptimized)
+            del_layers = set(layer for layer in self._layers if layer.flavour == CGFlavour.DYNAMIC)
+            tracker.register(*del_layers)
+            self._layers -= del_layers
+        if layer.type in (CGLayerType.OPT, CGLayerType.FLAVOUR):
+            # Delete just the layer
+            if layer in self:
+                tracker.register(layer)
+                self._layers.discard(layer)
+
+    def supports_any(self, layers: Set[CGLayer]) -> bool:
+        """Check whether the CG element is associated with at least one of the provided layers.
+
+        If the collection of provided layers is empty or one of the provided layer is of type ALL,
+        the check is automatically evaluated as True.
+
+        :param layers: a collection of layers to check.
+
+        :return: True if at least one matching layer is found, False otherwise.
+        """
+        if not layers or CGLayer(None) in layers:
+            # We do not track the ALL layer in this class.
+            return True
+        return bool(layers & self._layers)
 
 
 class CGEntryPoints:
@@ -497,12 +574,14 @@ class CGEntryPoints:
     points are obtained from dynamic profiling runs and can be further attributed to different
     optimization runs.
 
+    The MIXED layer is a bit special: it uses both the static and dynamic entry points.
+
     :ivar _graph_ref: a reference to the call graph object.
     :ivar _static: the RAW, STATIC and MIXED entry point.
     :ivar _dyn: a mapping of dynamic optimization run -> collection of entry points and vice versa.
     """
 
-    __slots__ = "_graph_ref", "_static", "_dyn"
+    __slots__ = "_graph_ref", "_static", "_dynamic"
 
     def __init__(
         self,
@@ -513,18 +592,17 @@ class CGEntryPoints:
         """Initializer.
 
         :param graph_ref: a reference to the call graph object.
-        :param static: the RAW, STATIC and MIXED entry point.
-        :param dynamic: a mapping of dynamic optimization run (None for unoptimized run)
-                        -> collection of entry points.
+        :param static: the RAW, STATIC and MIXED shared entry point.
+        :param dynamic: a mapping of dynamic layer -> collection of entry points.
         """
         self._graph_ref: nx.DiGraph = graph_ref
         self._static: str | None = static
-        # optimized (str) or unoptimized (None) run -> set of entry points
-        # entry point -> set of optimized (str) or unoptimized (None) runs
-        self._dyn: InverseSetMapping[str | None, str] = InverseSetMapping(dynamic)
+        # dynamic layer (optimized or not) -> set of entry points
+        # entry point -> set of dynamic layers
+        self._dynamic: InverseSetMapping[CGLayer, str] = InverseSetMapping(dynamic)
 
     def __contains__(self, entry_point: str) -> bool:
-        """Membership test.
+        """Entry point membership test.
 
         Check if the provided entry point is registered as either static or dynamic point.
 
@@ -532,61 +610,80 @@ class CGEntryPoints:
 
         :return: True if the function is registered as an entry point, False otherwise.
         """
-        return entry_point == self._static or self._dyn.contains_inverse(entry_point)
+        return entry_point == self._static or self._dynamic.contains_inverse(entry_point)
 
-    @overload
-    def get_entry_points(
-        self, layer: tuple[Literal[CGFlavour.DYNAMIC] | None, str | None]
-    ) -> set[str] | None:
-        ...
+    @property
+    def layers(self) -> Iterator[CGLayer]:
+        """Retrieve all unique layers associated with entry points.
 
-    @overload
-    def get_entry_points(
-        self, layer: tuple[Literal[CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED], str | None]
-    ) -> str | None:
-        ...
+        Note that the shared static entry point will report only those layers that are actually
+        associated with the entry point (i.e., not all RAW, STATIC and MIXED layers may be
+        provided).
 
-    @overload
-    def get_entry_points(
-        self, layer: tuple[CGFlavourLiterals | None, str | None]
-    ) -> set[str] | str | None:
-        ...
-
-    def get_entry_points(self, layer: CGLayerInput) -> set[str] | str | None:
-        """Retrieve entry point(s) for the given CG layer.
-
-        :param layer: a specification of the CG layer for which to obtain the entry point(s).
-
-        :return: the entry point(s) registered for the layer or None if no entry point is currently
-                 assigned to the requested layer.
+        :return: a collection of layers associated with known entry points.
         """
-        flavour, opt = layer
-        # Get all existing entry points
-        if flavour is None and opt is None:
-            all_points = set(self._dyn.keys(inverse=True))
-            if self._static is not None:
-                all_points.add(self._static)
-            return all_points
-        # Get entry points only for a specific optimization run
-        if flavour in (None, CGFlavour.DYNAMIC) and opt is not None:
-            return self._dyn.get(opt, None)
-        # Get entry points for dynamic flavour. If none, use entry points from all opt runs.
-        if flavour == CGFlavour.DYNAMIC:
-            dynamic_points = self._dyn.get(opt, None)
-            # No unoptimized dynamic entry points. Use optimized ones
-            if not dynamic_points:
-                dynamic_points = set(self._dyn.keys(inverse=True))
-            return dynamic_points
-        # Get the common entry point for raw, static and mixed
+        if self._static is not None:
+            layer: CGLayer
+            # Yield only those layers of static entry point that are actually supported.
+            for layer in self._graph_ref.nodes[self._static]["meta"].layers:
+                if layer.flavour != CGFlavour.DYNAMIC:
+                    # Ignore dynamic layers in static entry point
+                    yield layer
+        yield from self._dynamic
+
+    @property
+    def flavours(self) -> set[CGFlavour]:
+        """Retrieve the flavours that have entry point(s) registered.
+
+        Note that the shared static entry point will report only the flavours that are actually
+        associated with the entry point (i.e., not all RAW, STATIC and MIXED may be provided).
+
+        :return: a set of flavours with known entry points.
+        """
+        supported = set()
+        if self._static is not None:
+            # We ignore the Dynamic flavour here - it is determined by the presence or absence of
+            # dynamic entry points
+            supported = self._graph_ref.nodes[self._static]["meta"].flavours - {CGFlavour.DYNAMIC}
+        if self._dynamic:
+            supported.add(CGFlavour.DYNAMIC)
+        return supported
+
+    @property
+    def optimizations(self) -> Iterator[str]:
+        """Retrieve the optimization runs that have registered entry point(s).
+
+        :return: a collection of optimization runs with known entry points.
+        """
+        return (layer.optimization for layer in self._dynamic if layer.optimization is not None)
+
+    @property
+    def static(self) -> str | None:
+        """Retrieve the static shared entry point.
+
+        :return: the shared entry point, if any.
+        """
         return self._static
 
-    def add(self, entry_point: str, layer: CGLayerInput) -> bool:
+    @property
+    def dynamic(self) -> Iterable[tuple[CGLayer, set[str]]]:
+        """Retrieve all dynamic (both optimized and unoptimized) entry points and their layers.
+
+        :return: a collection of (layer, entry points).
+        """
+        # Pylint incorrectly doesn't recognize ItemsView from collections as iterable
+        # pylint: disable-next=not-an-iterable
+        return ((layer, opts) for layer, opts in self._dynamic.items())
+
+    def add(self, tracker: CGModificationTracker, entry_point: str, layer: CGLayer) -> bool:
         """Register new entry point for the given layer.
 
         If the layer supports only a single entry point, the currently registered entry point will
-        be overwritten. Otherwise, for dynamic (optimized) layer, the point will be added to the
-        collection of entry points.
+        be overwritten. For dynamic flavour and OPT layers, the point will be added to the
+        collection of entry points. For the layer of type ALL, the entry point will be added to all
+        currently tracked layers.
 
+        :param tracker: the CG modification tracker.
         :param entry_point: the name of the call graph entry point (function).
         :param layer: the layer associated with the entry point.
 
@@ -594,64 +691,116 @@ class CGEntryPoints:
         """
         if entry_point not in self._graph_ref.nodes:
             return False
-        flavour, opt = layer
-        # Static entry point, also covers raw and mixed flavours
-        if flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED):
-            self._static = entry_point
+        if layer.type == CGLayerType.ALL:
+            self._change_static_point(tracker, entry_point)
+            for dyn_layer in self._dynamic:
+                self._change_dynamic_point(tracker, entry_point, dyn_layer)
+        elif layer.flavour == CGFlavour.DYNAMIC:
+            self._change_dynamic_point(tracker, entry_point, layer)
         else:
-            self._dyn.add(opt, entry_point)
+            self._change_static_point(tracker, entry_point)
         return True
 
-    def remove(self, entry_point: str, layer: CGLayerInput) -> None:
+    def remove(self, tracker: CGModificationTracker, entry_point: str, layer: CGLayer) -> None:
         """Unregister an entry point for the given layer, if it exists.
 
+        If the layer is of type ALL or the entry point does not exist in the graph anymore, remove
+        all references to the entry point from all layers. Note that removing a static entry point
+        will remove that shared entry point for all relevant flavour layers (i.e., RAW, STATIC and
+        MIXED).
+
+        :param tracker: the CG modification tracker.
         :param entry_point: the name of the call graph entry point (function).
         :param layer: the layer associated with the entry point.
         """
         if entry_point not in self:
             return
-        flavour, opt = layer
-        # The node has been completely removed
-        # Remove all references to it regardless of the flavour or opt
-        if entry_point not in self._graph_ref.nodes:
+        if layer.type == CGLayerType.ALL or entry_point not in self._graph_ref.nodes:
+            # The node has been / will be completely removed
+            # Remove all references to it regardless of the flavour or opt
             if entry_point == self._static:
-                self._static = None
-            if self._dyn.contains_inverse(entry_point):
-                self._dyn.delitem_inverse(entry_point)
-        # The removal targets only a specific flavour and optionally an optimization run
-        elif (
-            flavour in (CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED)
-            and entry_point == self._static
-        ):
-            # Remove the static entry point if no more relevant flavours are associated with it
-            if (
-                not {CGFlavour.RAW, CGFlavour.STATIC, CGFlavour.MIXED}
-                & self._graph_ref.nodes[entry_point]["meta"].flavours
-            ):
-                self._static = None
-        # Remove dynamic or optimization entry point
-        elif flavour == CGFlavour.DYNAMIC or (flavour is None and opt is not None):
-            self._dyn.remove(opt, entry_point)
+                self._change_static_point(tracker, None)
+            if self._dynamic.contains_inverse(entry_point):
+                for dyn_layer in self._dynamic.getitem_inverse(entry_point):
+                    self._change_dynamic_point(tracker, entry_point, dyn_layer, remove=True)
+        elif layer.type == CGLayerType.OPT or layer.flavour == CGFlavour.DYNAMIC:
+            # Remove dynamic or optimization entry point
+            self._change_dynamic_point(tracker, entry_point, layer, remove=True)
+        elif entry_point == self._static:
+            self._change_static_point(tracker, None)
 
-    @property
-    def flavours(self) -> set[CGFlavour]:
-        """Retrieve the flavours that have registered entry point(s).
+    def get_entry_points(self, layer: CGLayer) -> set[str]:
+        """Retrieve entry point(s) for the given CG layer.
 
-        :return: the set of flavours with known entry points.
+        For layer of type ALL, all known entry points will be provided. If the dynamic flavour layer
+        has no associated entry points, a collection of entry points from OPT layers will be
+        provided. Also note that the method returns the current static entry point for all relevant
+        layers (that is, RAW, STATIC and MIXED), even if that particular layer is currently not
+        supported by the call graph.
+
+        :param layer: a specification of the CG layer for which to obtain the entry point(s).
+
+        :return: the entry point(s) registered for the layer, if any.
         """
-        supported = set()
-        if self._static is not None:
-            # We ignore the Dynamic flavour here - it is determined by the presence or absence of
-            # dynamic entry points
-            supported = self._graph_ref.nodes[self._static]["meta"].flavours - {CGFlavour.DYNAMIC}
-        if self._dyn:
-            supported.add(CGFlavour.DYNAMIC)
-        return supported
+        entry_points: set[str] = set()
+        if layer.type == CGLayerType.ALL:
+            # Get all existing entry points
+            entry_points |= self._dynamic.keys(inverse=True)
+            if self._static is not None:
+                entry_points.add(self._static)
+        elif layer.type == CGLayerType.OPT:
+            # Get entry points only for a specific optimization run
+            if layer in self._dynamic:
+                entry_points |= self._dynamic[layer]
+        elif layer.flavour in (CGFlavour.DYNAMIC, CGFlavour.MIXED):
+            # Get entry pts for unopt dynamic flavour. If none, use entry pts from all opt runs.
+            entry_points |= (
+                self._dynamic[layer] if layer in self._dynamic else self._dynamic.keys(inverse=True)
+            )
+        if layer.flavour != CGFlavour.DYNAMIC and self._static is not None:
+            # Static flavour entry point, if any
+            entry_points.add(self._static)
 
-    @property
-    def optimizations(self) -> set[str]:
-        """Retrieve the optimization runs that have registered entry point(s).
+        return entry_points
 
-        :return: the set of optimization runs with known entry points.
+    def _change_static_point(self, tracker: CGModificationTracker, entry_point: str | None) -> None:
+        """Set or remove a static entry point.
+
+        The method handles changes of static entry point so that the changes are properly tracked
+        by the CG modification tracker.
+
+        :param tracker: the CG modification tracker.
+        :param entry_point: the new entry point or None for entry point removal.
         """
-        return {opt_name for opt_name in self._dyn if opt_name is not None}
+        changed: set[CGLayer] = set()
+        if self._static != entry_point:
+            # We are actually changing the static entry point
+            if self._static is not None and self._static in self._graph_ref.nodes:
+                # Register all layers of the original entry point, if possible
+                changed |= set(self._graph_ref.nodes[self._static]["meta"].layers)
+        if entry_point is not None:
+            # Register all layers of the new entry point
+            changed |= set(self._graph_ref.nodes[entry_point]["meta"].layers)
+        # Filter out dynamic layers as they are irrelevant for static entry point
+        tracker.register(*[layer for layer in changed if layer.flavour != CGFlavour.DYNAMIC])
+        self._static = entry_point
+
+    def _change_dynamic_point(
+        self, tracker: CGModificationTracker, entry_point: str, layer: CGLayer, remove: bool = False
+    ) -> None:
+        """Add or remove a dynamic entry point.
+
+        The method handles changes of dynamic entry points so that the changes are properly tracked
+        by the CG modification tracker.
+
+        :param tracker: the CG modification tracker.
+        :param layer: the layer (to be) associated with the entry point.
+        :param entry_point: the entry point.
+        :param remove: True if the entry point should be removed, False if it should be added.
+        """
+        is_in = entry_point in self._dynamic.get(layer, set())
+        action = self._dynamic.remove if remove else self._dynamic.add
+        # Check if we are indeed removing existing, or adding new entry point
+        if (remove and is_in) or (not remove and not is_in):
+            tracker.register(layer)
+            action(layer, entry_point)
