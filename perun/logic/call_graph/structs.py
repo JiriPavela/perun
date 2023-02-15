@@ -1,46 +1,5 @@
 """A helper module with helper or internal classes, structures, constants and enumerations commonly
 used by other CG modules.
-
-# TODO: Move to a more fitting file in the end. Perhaps the __init__.py or graph.py.
-Glossary:
-    - CG flavour:
-        In general, the obtained call graph of a program may not be 100% correct. The precision
-        of a CG depends on the method of extraction or reconstruction. E.g., the dynamic call
-        graph will clearly contain only truly reachable edges and nodes, but it will very likely
-        be incomplete. On the other hand, a call graph obtained from static analysis tools may be
-        more general, but over-approximate too much or completely miss some dynamic dispatch
-        calls. Hence, we want to distinguish those different "flavours" of a call graph and be
-        able to manipulate them individually and, to a certain degree, independently. Flavours
-        thus describe the type of a call graph based on how it was obtained.
-
-    - Optimization:
-        Also sometimes called 'opt', 'opts' or 'optimization run(s)'. Optimizations, in the context
-        of call graphs, refer to profiling runs that are not monitoring all of the possible function
-        calls within a program, but only a selected subset of available functions. Call graphs
-        obtained from optimization runs are generally less precise than call graphs obtained from
-        a full profiling run, and are thus considered as a special type  of DYNAMIC flavour call
-        graphs. Optimizations can have different configurations and are  distinguished using
-        optimization IDs.
-
-    - Layer:
-        A combination of flavour and optimization(s) that induce a subgraph of the call graph. As
-        an example, the (dynamic flavour, opt_id) tuple identify nodes and edges that are
-        associated with specific dynamic optimised run(s) "opt_id", and generally form only a
-        subgraph of the original call graph. As there are multiple possible interpretations for
-        some combinations, the call graph implementation imposes some rules to avoid unambiguity:
-         - (flavour == None,             opt == None)   => The complete call graph.
-         - (flavour in (None, Dynamic),  opt != None)   => Dynamic optimization run "opt".
-         - (flavour != None,             opt == X   )   => Flavour layer only, no optimization.
-
-    - Call graph / layers consistency:
-        As nodes and edges may be inserted to, or removed from, the call graph, the different
-        layers may become inconsistent, i.e., produce an invalid subgraph. In the case of
-        insertion, the inconsistencies arise because certain flavours are dependent on each other
-        (e.g., the Mixed layer is constructed using the Raw and Dynamic flavours). As for
-        deletion, deleting certain edges or nodes may cause some - previously reachable - parts
-        of a layer subgraph unreachable. To avoid expensive recalculation after every minor
-        change, the call graph instead tracks which layers were modified and performs the
-        recalculation only when needed.
 """
 
 from __future__ import annotations
@@ -66,6 +25,10 @@ CGDynEntryPoints = Union[dict["CGLayer", Set[str]], Iterable[tuple["CGLayer", Se
 TIMESTAMP_FMT = "%Y-%m-%d-%H-%M-%S"
 
 
+class CallGraphError(Exception):
+    """Raised when an operation on CG fails."""
+
+
 class VersionState(Enum):
     """Call graph version state enumeration.
 
@@ -75,12 +38,6 @@ class VersionState(Enum):
 
     CLEAN = "c"
     DIRTY = "d"
-
-
-class CGExtractor(Enum):
-    """An enumeration of supported call graph extraction tools."""
-
-    ANGR = "a"
 
 
 class CGFlavour(OrderedEnum):
