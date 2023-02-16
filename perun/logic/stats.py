@@ -346,12 +346,14 @@ class StatsFile(Generic[PT]):
         self.filepath.absolute.unlink(missing_ok=True)
         try:
             # Recursively remove empty directories (up to the <minor version dir>)
-            dir_path = self.filepath.relative.parent
-            while dir_path != '.':
-                dir_path.rmdir()
+            dir_path: Path = self.filepath.relative.parent
+            minor_dir = Path(find_minor_stats_directory(self.filepath.minor_version)[1])
+            while dir_path.name:
+                (minor_dir / dir_path).rmdir()
                 dir_path = dir_path.parent
             delete_version_dirs([self.filepath.minor_version], True)
         except OSError:
+            # Will be raised when a directory is not empty
             return
 
     @overload
