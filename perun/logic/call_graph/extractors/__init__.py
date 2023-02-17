@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 if TYPE_CHECKING:
-    from perun.logic.call_graph import CallGraph
+    from perun.logic.call_graph.graphs import CallGraph
 
 
 class CallGraphExtractorError(Exception):

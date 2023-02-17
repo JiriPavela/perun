@@ -292,10 +292,10 @@ class OrderedEnum(Enum):
     regards of their order. Taken from:
         https://stackoverflow.com/questions/42369749/use-definition-order-of-enum-as-natural-order
 
-    :ivar int order: the order of the new element
+    :ivar order: the order of the new element
     """
 
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
         """ Create the new enumeration element and compute its order.
 
         :param args: additional element arguments
@@ -309,43 +309,43 @@ class OrderedEnum(Enum):
         ordered = len(self.__class__.__members__) + 1
         self.order = ordered
 
-    def __ge__(self, other):
+    def __ge__(self, other: object) -> bool:
         """ Comparison operator >=.
 
-        :param OrderedEnum other: the other enumeration element
-        :return bool: the comparison result
+        :param other: the other enumeration element
+        :return: the comparison result
         """
-        if self.__class__ is other.__class__:
+        if isinstance(other, OrderedEnum):
             return self.order >= other.order
         return NotImplemented
 
-    def __gt__(self, other):
+    def __gt__(self, other: object) -> bool:
         """ Comparison operator >.
 
-        :param OrderedEnum other: the other enumeration element
-        :return bool: the comparison result
+        :param other: the other enumeration element
+        :return: the comparison result
         """
-        if self.__class__ is other.__class__:
+        if isinstance(other, OrderedEnum):
             return self.order > other.order
         return NotImplemented
 
-    def __le__(self, other):
+    def __le__(self, other: object) -> bool:
         """ Comparison operator <=.
 
-        :param OrderedEnum other: the other enumeration element
-        :return bool: the comparison result
+        :param other: the other enumeration element
+        :return: the comparison result
         """
-        if self.__class__ is other.__class__:
+        if isinstance(other, OrderedEnum):
             return self.order <= other.order
         return NotImplemented
 
-    def __lt__(self, other):
+    def __lt__(self, other: object) -> bool:
         """ Comparison operator <.
 
-        :param OrderedEnum other: the other enumeration element
-        :return bool: the comparison result
+        :param other: the other enumeration element
+        :return: the comparison result
         """
-        if self.__class__ is other.__class__:
+        if isinstance(other, OrderedEnum):
             return self.order < other.order
         return NotImplemented
 

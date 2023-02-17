@@ -3,6 +3,9 @@
 Utils contains various helper modules and functions, that can be used in arbitrary projects, and
 are not specific for perun pcs, like e.g. helper decorators, logs, etc.
 """
+from collections import Callable
+from typing import TypeVar
+from collections.abc import Iterable
 
 import importlib
 import shlex
@@ -30,6 +33,9 @@ __coauthor__ = 'Jiri Pavela'
 #  - additional postfixes, such as characters or +, -
 # e.g., 3.11a, 3.1.2b, 3.6.8+
 PYTHON_VERSION = re.compile(r'^(?:(\d*)([^0-9.]*))?(?:\.(\d+)([^0-9.]*))?(?:\.(\d+)([^0-9.]*))?')
+
+
+T = TypeVar("T")
 
 
 def get_build_directories(root='.', template=None):
@@ -399,24 +405,26 @@ def merge_dict_range(*args):
     return res
 
 
-def partition_list(input_list, condition):
-    """Utility function for list partitioning on a condition so that the list is not iterated
-    twice and the condition is evaluated only once.
+def partition_list(
+    iterable: Iterable[T], condition: Callable[[T], bool]
+) -> tuple[list[T], list[T]]:
+    """Utility function for partitioning an iterable on a condition so that only one iteration
+    (and condition evaluation per each item) is needed.
 
     Based on a SO answer featuring multiple methods and their performance comparison:
-    'https://stackoverflow.com/a/31448772'
+    'https://stackoverflow.com/a/31448772'.
 
-    :param iterator input_list: the input list to be partitioned
-    :param function condition: the condition that should be evaluated on every list item
-    :return tuple: (list of items evaluated to True, list of items evaluated to False)
+    :param iterable: the input iterable to be partitioned.
+    :param condition: the partitioning condition that will be evaluated on every item.
+    :return: items evaluated as True by the condition, items evaluated as False by the condition.
     """
-    good, bad = [], []
-    for item in input_list:
+    is_true, is_false = [], []
+    for item in iterable:
         if condition(item):
-            good.append(item)
+            is_true.append(item)
         else:
-            bad.append(item)
-    return good, bad
+            is_false.append(item)
+    return is_true, is_false
 
 
 def abs_in_relative_range(value, range_val, range_rate):

@@ -51,7 +51,7 @@ from perun.logic.call_graph.structs import (
     CGLayer,
     CGLayerType,
     CGDynEntryPoints,
-    CGElementLayers
+    CGElementLayers,
 )
 
 # Instruction name, Instruction operands

@@ -40,7 +40,7 @@ from perun.logic.call_graph.structs import (
 )
 
 
-def save(cg_manager: CallGraphManager) -> StatsFile:
+def save(cg_manager: CallGraphManager) -> StatsFile[CallGraphPath]:
     """Save the CG manager to a stats file.
 
     :param cg_manager: the CG manager object.
@@ -63,7 +63,8 @@ def load(file: CallGraphPath | StatsFile[CallGraphPath]) -> CallGraphManager:
     if isinstance(file, CallGraphPath):
         file = StatsFile(file)
     with file.open("rt") as cg_handle:
-        return json.load(cg_handle, cls=CGJsonDecoder)
+        cg_manager: CallGraphManager = json.load(cg_handle, cls=CGJsonDecoder)
+        return cg_manager
 
 
 class CGJsonEncoder(json.JSONEncoder):

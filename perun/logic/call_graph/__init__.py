@@ -22,15 +22,27 @@ from perun.utils import partition_list
 from perun.collect.identification import CollectCompoundId
 from perun.logic.stats import StatsFile, iter_files, iter_predecessors
 
-from perun.logic.call_graph.structs import ValidStates, VersionState, TIMESTAMP_FMT
+from perun.logic.call_graph.structs import CGLayer, ValidStates, VersionState, TIMESTAMP_FMT
 from perun.logic.call_graph.version import CGVersion
 from perun.logic.call_graph.path import CallGraphPath
-from perun.logic.call_graph.graphs import CallGraph, FuncCFG
+from perun.logic.call_graph.graphs import CallGraph, FuncCFG, CallGraphView
 from perun.logic.call_graph.extractors import SupportedExtractors, extractor_factory
 
 # Import on demand due to the circular dependency with the io module
 with demandimport.enabled():
     import perun.logic.call_graph.io as cg_io
+
+
+__all__ = [
+    "CallGraphManager",
+    "CallGraphPath",
+    "CallGraph",
+    "CallGraphView",
+    "FuncCFG",
+    "CGLayer",
+    "CGVersion",
+    "SupportedExtractors",
+]
 
 
 class CallGraphManager:

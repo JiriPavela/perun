@@ -14,7 +14,8 @@ Note that the files dirty / clean state is determined solely from the VCS-tracke
 tracking changes of files outside of VCS is difficult.
 """
 from __future__ import annotations
-from typing import Collection
+from collections.abc import Collection
+from typing import TypeVar, Type
 
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +25,7 @@ from perun.collect.identification import CollectCompoundId
 from perun.utils.structs import VCSObjectChange, VCSChangeState
 from perun.logic.call_graph.structs import TIMESTAMP_FMT, VersionState
 
+AnyCGVersion = TypeVar("AnyCGVersion", bound="CGVersion")
 
 # File path -> VCS hash mapping
 SourcesMap = dict[Path, str]
@@ -183,7 +185,9 @@ class CGVersion:
         return bool(self._cg_version_hash)
 
     @classmethod
-    def current(cls, compound_id: CollectCompoundId, sources: Collection[Path]) -> CGVersion:
+    def current(
+        cls: Type[AnyCGVersion], compound_id: CollectCompoundId, sources: Collection[Path]
+    ) -> AnyCGVersion:
         """An alternative initializer for current CG version.
 
         :param compound_id: compound ID of the collection configuration.
