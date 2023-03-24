@@ -5,7 +5,7 @@ used by other CG modules.
 from __future__ import annotations
 
 from typing import Literal, Union
-from collections.abc import Iterator, Set, Iterable
+from collections.abc import Iterator, Set, Iterable, Sequence, Callable
 from enum import Enum
 
 import networkx as nx
@@ -19,6 +19,14 @@ ValidStates = Literal["c", "d", "*"]
 # Dynamic CG entry points (i.e., top-level function of a, possibly optimized, profiling run)
 # Dynamic (un)optimized layers -> set of entry points
 CGDynEntryPoints = Union[dict["CGLayer", Set[str]], Iterable[tuple["CGLayer", Set[str]]]]
+
+# Instruction name, Instruction operands
+CFGInstr = tuple[str, str]
+# Basic block, a sequence of instructions
+BasicBlock = Sequence[CFGInstr]
+# Generic basic block equivalence comparison function
+# Allows to specify different equivalence criterion when comparing two basic blocks
+BlockEq = Callable[[BasicBlock, BasicBlock], bool]
 
 
 # Timestamp format used for the CG version stats files
@@ -38,6 +46,28 @@ class VersionState(Enum):
 
     CLEAN = "c"
     DIRTY = "d"
+
+
+class CFGNodeType(Enum):
+    """CFG node type representation.
+
+    The CFG supports both basic block (BB) and CALL instruction destination (function call) nodes.
+    """
+
+    BB = "b"
+    FUNC = "f"
+
+
+class CFGEdgeType(OrderedEnum):
+    """CFG edge type representation.
+
+    The JUMP type represents control flow change caused by a (conditional) jump instructions.
+    The CONTINUE type represents the alternative control flow to the JUMP, i.e., continuation to
+    the subsequent basic block.
+    """
+
+    JUMP = "j"
+    CONTINUE = "c"
 
 
 class CGFlavour(OrderedEnum):

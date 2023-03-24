@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Collection
+from typing import Collection, TYPE_CHECKING
 
 import angr
+from angr.knowledge_plugins.functions.function import Function as AngrFunction
 
 from perun.logic.call_graph.extractors import CGExtractor
 from perun.logic.call_graph.structs import CGFlavour, CGLayer
-from perun.logic.call_graph.graphs import CallGraph, FuncCFG
+from perun.logic.call_graph.cg import CallGraph
+from perun.logic.call_graph.cfg import FuncCFG, CFGNodeBB, CFGNodeFunc
+from perun.logic.call_graph.archs import SupportedArchs, architectures
+
+if TYPE_CHECKING:
+    from angr import Project as AngrProject
+    from angr.block import Block as AngrBlock
+    from angr.analyses.cfg.cfg_fast import CFGFast
 
 
 # Address -> normalized name
@@ -29,6 +37,7 @@ class AngrExtractor(CGExtractor):
     :ivar libs: additional libraries, if provided.
     :ivar angr_cfg: the CFG information obtained from the Angr analysis.
     :ivar _functions_map: an internal 'function address -> function name' mapping.
+    :ivar _angr_arch: name of the CPU architecture as reported by angr.
     """
 
     __slots__ = "main_binary", "libs", "angr_cfg", "_functions_map"
@@ -41,8 +50,9 @@ class AngrExtractor(CGExtractor):
         """
         self.main_binary: Path = binary
         self.libs: list[Path] = list(libs) if libs is not None else []
-        self.angr_cfg: angr.analyses.CFGFast | None = None
+        self.angr_cfg: CFGFast | None = None
         self._functions_map: AngrFunctionsMap = {}
+        self._angr_arch: str = ""
 
     def extract(self, with_control_flow: bool = True) -> CallGraph:
         """The CG (and optionally CFG) extraction method.
@@ -51,10 +61,11 @@ class AngrExtractor(CGExtractor):
 
         :return: the reconstructed CG, optionally containing the functions' CFGs.
         """
-        proj: angr.Project = angr.Project(
+        proj: AngrProject = angr.Project(
             str(self.main_binary),
             load_options={"auto_load_libs": False, "force_load_libs": map(str, self.libs)},
         )
+        self._angr_arch = proj.arch.name
         if self.angr_cfg is None:
             # Angr analyses are plugins and mypy can't properly detect their existence
             self.angr_cfg = proj.analyses.CFGFast(normalize=True)  # type: ignore
@@ -77,7 +88,7 @@ class AngrExtractor(CGExtractor):
         assert self.angr_cfg is not None
         analyzed_binaries = [lib.name for lib in self.libs] + [self.main_binary.name]
         # Obtain relevant CG functions
-        func: angr.knowledge_plugins.Function
+        func: AngrFunction
         external_functions: set[str] = set()
         local_functions: set[tuple[int, str]] = set()
         for func in self.angr_cfg.kb.functions.values():
@@ -133,27 +144,47 @@ class AngrExtractor(CGExtractor):
         :param call_graph: the reconstructed CG.
         """
         assert self.angr_cfg is not None
+        cfg_arch = architectures[SupportedArchs.from_name(self._angr_arch)]
         for func_addr in self._functions_map:
             # For every function in our CG, we create a separate CFG
-            cfg = FuncCFG()
             func = self.angr_cfg.kb.functions.get_by_addr(func_addr)
             # Get the function's basic blocks (BB)
-            local_blocks: dict[int, angr.Block] = {block.addr: block for block in func.blocks}
-            for block_node in func.transition_graph.nodes:
-                # Match the function's transition graph nodes with the obtained BBs
-                block = local_blocks.get(block_node.addr, None)
-                if block is not None:
-                    cfg.add_basic_block(
-                        block.addr, [(i.insn.mnemonic, i.insn.op_str) for i in block.capstone.insns]
-                    )
-                elif isinstance(block_node, angr.knowledge_plugins.Function):
-                    # The CFG may contain function call nodes, register them
-                    cfg.add_func_call(block_node.addr, block_node.name)
-                else:
-                    # Regular basic block node
-                    cfg.add_basic_block(block_node.addr, [])
+            local_blocks: dict[int, AngrBlock] = {block.addr: block for block in func.blocks}
+            # Get the entry point. If it is not specified in the function, use the basic block
+            # with the lowest address value
+            entry = (
+                func.startpoint.addr
+                if func.startpoint is not None
+                else sorted(local_blocks.keys())[0]
+            )
+            cfg = FuncCFG(entry, cfg_arch.arch)
+            self._add_cfg_nodes(cfg, func, local_blocks)
             # Add the control flow edges based on the transition graph
             for source, dest in func.transition_graph.edges:
                 cfg.add_flow(source.addr, dest.addr)
             # Register the CFG with the CG function node
             call_graph.add_element_data(func.name, "cfg", cfg)
+
+    @staticmethod
+    def _add_cfg_nodes(cfg: FuncCFG, func: AngrFunction, func_blocks: dict[int, AngrBlock]) -> None:
+        """Construct CFG nodes.
+
+        :param cfg: the CFG being constructed.
+        :param func: details about the current function we are constructing CFG for.
+        :param func_blocks: basic blocks present in the function.
+        """
+        for block_node in func.transition_graph.nodes:
+            # Match the function's transition graph nodes with the obtained BBs
+            block = func_blocks.get(block_node.addr, None)
+            if block is not None:
+                # Regular basic block node
+                cfg.add_node(
+                    CFGNodeBB(
+                        block.addr,
+                        block.size,
+                        [(i.insn.mnemonic, i.insn.op_str) for i in block.capstone.insns],
+                    )
+                )
+            elif isinstance(block_node, AngrFunction):
+                # A function call node
+                cfg.add_node(CFGNodeFunc(block_node.addr, block_node.size, block_node.name))

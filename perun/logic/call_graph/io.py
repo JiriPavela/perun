@@ -28,10 +28,12 @@ from perun.collect.identification import CollectCompoundId
 from perun.logic.stats import StatsFile
 
 from perun.logic.call_graph import CallGraphManager
-from perun.logic.call_graph.graphs import CallGraph, FuncCFG
+from perun.logic.call_graph.cg import CallGraph
+from perun.logic.call_graph.cfg import FuncCFG, CFGNode, CFGNodeBB, CFGNodeFunc
 from perun.logic.call_graph.path import CallGraphPath
 from perun.logic.call_graph.version import FileChangeDetail, CGVersion
 from perun.logic.call_graph.structs import (
+    CFGNodeType,
     CGLayer,
     CGElementLayers,
     CGFlavour,
@@ -126,7 +128,9 @@ class CGJsonEncoder(json.JSONEncoder):
                 "!t": "cg",
             }
         if isinstance(o, FuncCFG):
-            return {"g": nx.adjacency_data(o.graph), "!t": "cfg"}
+            return {"e": o.entrypoint, "g": nx.adjacency_data(o.graph), "!t": "cfg"}
+        if isinstance(o, CFGNode):
+            return {"a": o.addr, "s": o.size, "d": o.data, "!t": f"cgn_{o.type.value}"}
         if isinstance(o, CGElementLayers):
             return {"l": list(o.layers), "!t": "cge"}
         if isinstance(o, CallGraphManager):
@@ -187,7 +191,11 @@ class CGJsonDecoder(json.JSONDecoder):
         if obj["!t"] == "cg":
             return CallGraph(nx.adjacency_graph(obj["g"]), obj["s"], obj["d"])
         if obj["!t"] == "cfg":
-            return FuncCFG(nx.adjacency_graph(obj["g"]))
+            return FuncCFG(obj["e"], nx.adjacency_graph(obj["g"]))
+        if obj["!t"] == f"cgn_{CFGNodeType.BB.value}":
+            return CFGNodeBB(obj["a"], obj["s"], obj["d"])
+        if obj["!t"] == f"cgn_{CFGNodeType.FUNC.value}":
+            return CFGNodeFunc(obj["a"], obj["s"], obj["d"])
         if obj["!t"] == "cge":
             return CGElementLayers(*obj["l"])
         if obj["!t"] == "cgm":

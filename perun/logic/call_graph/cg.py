@@ -1,4 +1,4 @@
-"""This module implements Call Graph and Control Flow Graph representations.
+"""This module implements Call Graph and its view representations.
 
 Glossary:
     - CG flavour:
@@ -38,11 +38,11 @@ Glossary:
         recalculation only when needed.
 """
 from __future__ import annotations
-
-from collections.abc import Iterator, Iterable, Callable
+from collections.abc import Iterator
 
 import networkx as nx
 
+from perun.logic.call_graph.cfg import FuncCFG
 from perun.logic.call_graph.structs import (
     CallGraphError,
     CGFlavour,
@@ -53,83 +53,6 @@ from perun.logic.call_graph.structs import (
     CGDynEntryPoints,
     CGElementLayers,
 )
-
-# Instruction name, Instruction operands
-CFGInstr = tuple[str, str]
-# Old name -> New name
-FuncRenameMap = dict[str, str]
-# Basic block equivalence comparison function
-# Allows to specify different equivalence criterion when comparing two basic blocks
-BlockEq = Callable[[Iterable[CFGInstr], Iterable[CFGInstr]], bool]
-
-
-class FuncCFG:
-    """A representation of function's Control Flow Graph (CFG).
-
-    A CFG node represents either a basic block (BB), or a call to another function. While BBs
-    contain a list of instructions, the function call nodes contain the name of the function.
-    A CFG edge is oriented and represents the control flow within the graph.
-
-    :ivar graph: the internal representation of the CFG.
-    """
-
-    __slots__ = ["graph"]
-
-    def __init__(self, graph: nx.DiGraph | None = None) -> None:
-        """Initializer.
-
-        :param graph: a valid function CFG or None for empty graph.
-        """
-        self.graph: nx.DiGraph = graph if graph is not None else nx.DiGraph()
-
-    def add_basic_block(self, block_id: int, instructions: Iterable[CFGInstr]) -> None:
-        """Add new node representing a basic block with instructions to the CFG.
-
-        :param block_id: a unique ID of the node (e.g., starting address of the basic block).
-        :param instructions: a collection of the basic block instructions (e.g., ASM).
-        """
-        self.graph.add_node(block_id, instr=instructions)
-
-    def add_func_call(self, block_id: int, function_name: str) -> None:
-        """Add new node representing a function call to the CFG.
-
-        :param block_id: a unique ID of the node (e.g., address of the call instruction).
-        :param function_name: name of the called function.
-        """
-        self.graph.add_node(block_id, func=function_name)
-
-    def add_flow(self, source: int, dest: int) -> bool:
-        """Add new control flow edge to the CFG.
-
-        Both the edge's source and destination nodes must already be in the CFG
-
-        :param source: a unique ID of the source node.
-        :param dest: a unique ID of the destination node.
-
-        :return: False if either source or destination node are not in the graph, True otherwise.
-        """
-        # Don't add the flow relation if one of the nodes is missing
-        if source in self.graph.nodes and dest in self.graph.nodes:
-            self.graph.add_edge(source, dest)
-            return True
-        return False
-
-    def compare(
-        self, other: FuncCFG, renames: FuncRenameMap | None = None, block_eq: BlockEq | None = None
-    ) -> bool:
-        """Compare two CFGs and determine if they are equivalent.
-
-        By default:
-         1) The equivalence criterion for two basic blocks requires total equality of their
-            instruction lists. For more lenient comparison, custom block equivalence function may
-            be supplied.
-         2) The equivalence criterion for two function call nodes requires equality of the function
-            names. More accurate comparison can be achieved by supplying a mapping of function
-            renames.
-
-        # TODO: implement, add some custom pre-designed equivalence functions
-        """
-        raise NotImplementedError()
 
 
 class CallGraph:

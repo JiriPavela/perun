@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 
 if TYPE_CHECKING:
-    from perun.logic.call_graph.graphs import CallGraph
+    from perun.logic.call_graph.cg import CallGraph
 
 
 class CallGraphExtractorError(Exception):
@@ -99,6 +99,7 @@ def extractor_factory(
     try:
         if extractor == SupportedExtractors.ANGR:
             import perun.logic.call_graph.extractors.angr_extractor as angr_module
+
             if binary is None:
                 raise CallGraphExtractorError(extractor, "Missing required parameter `binary`.")
             return angr_module.AngrExtractor(binary, libs)
