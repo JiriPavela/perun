@@ -4,11 +4,12 @@ used by other CG modules.
 
 from __future__ import annotations
 
-from typing import Literal, Union
-from collections.abc import Iterator, Set, Iterable, Sequence, Callable
+from typing import Literal, Union, Protocol, Any
+from collections.abc import Iterator, Set, Iterable, Sequence
 from enum import Enum
 
 import networkx as nx
+
 
 from perun.utils.structs import OrderedEnum
 from perun.utils.containers import InverseSetMapping
@@ -24,9 +25,6 @@ CGDynEntryPoints = Union[dict["CGLayer", Set[str]], Iterable[tuple["CGLayer", Se
 CFGInstr = tuple[str, str]
 # Basic block, a sequence of instructions
 BasicBlock = Sequence[CFGInstr]
-# Generic basic block equivalence comparison function
-# Allows to specify different equivalence criterion when comparing two basic blocks
-BlockEq = Callable[[BasicBlock, BasicBlock], bool]
 
 
 # Timestamp format used for the CG version stats files
@@ -68,6 +66,16 @@ class CFGEdgeType(OrderedEnum):
 
     JUMP = "j"
     CONTINUE = "c"
+
+
+class BlockEq(Protocol):
+    """Generic basic block equivalence comparison function.
+
+    Allows to specify more or less strict equivalence criterion when comparing two basic blocks.
+    """
+
+    def __call__(self, block: BasicBlock, block_other: BasicBlock, **kwargs: Any) -> bool:
+        ...
 
 
 class CGFlavour(OrderedEnum):
@@ -791,3 +799,28 @@ class CGEntryPoints:
         if (remove and is_in) or (not remove and not is_in):
             tracker.register(layer)
             action(layer, entry_point)
+
+
+class FunctionRenames:
+    def __init__(self, matching_names: set[str], new_names: set[str], missing_names: set[str]) -> None:
+        self.name_mapping: dict[str, str] = {name: name for name in matching_names}
+        self.new: set[str] = new_names
+        self.missing: set[str] = missing_names
+        self._rename_candidates: dict[str, set[str]] = {}
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.name_mapping
+
+    def __getitem__(self, item: str) -> str | None:
+        return self.name_mapping.get(item)
+
+    def __setitem__(self, key: str, value: str) -> None:
+        # Note that we do not allow overwrite here
+        if key not in self.name_mapping:
+            self.name_mapping[key] = value
+
+    def add_possible_rename(self, of: str, to: str) -> None:
+        self._rename_candidates.setdefault(of, set()).add(to)
+
+
+

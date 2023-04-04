@@ -25,8 +25,8 @@ from perun.logic.stats import StatsFile, iter_files, iter_predecessors
 from perun.logic.call_graph.structs import CGLayer, ValidStates, VersionState, TIMESTAMP_FMT
 from perun.logic.call_graph.version import CGVersion
 from perun.logic.call_graph.path import CallGraphPath
-from perun.logic.call_graph.cg import CallGraph, CallGraphView
-from perun.logic.call_graph.cfg import FuncCFG
+from perun.logic.call_graph.graphs.cg import CallGraph, CallGraphView
+from perun.logic.call_graph.graphs.cfg import FuncCFG
 from perun.logic.call_graph.extractors import SupportedExtractors, extractor_factory
 
 # Import on demand due to the circular dependency with the io module

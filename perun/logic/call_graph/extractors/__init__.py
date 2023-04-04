@@ -10,15 +10,17 @@ function.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING
 
-from abc import ABC, abstractmethod
 from collections.abc import Collection
 from enum import Enum
 from pathlib import Path
 
 if TYPE_CHECKING:
-    from perun.logic.call_graph.cg import CallGraph
+    from perun.logic.call_graph.graphs.cg import CallGraph
+
+
+__all__ = ["SupportedExtractors", "CGExtractor", "extractor_factory"]
 
 
 class CallGraphExtractorError(Exception):
@@ -50,7 +52,7 @@ class SupportedExtractors(Enum):
     ANGR = "angr"
 
 
-class CGExtractor(ABC):
+class CGExtractor(Protocol):
     """Call Graph extractor interface.
 
     By default, the concrete extractor class should not perform the CG reconstruction
@@ -62,7 +64,6 @@ class CGExtractor(ABC):
     If CFG was extracted as well, it will be stored within the CG structure.
     """
 
-    @abstractmethod
     def extract(self, with_control_flow: bool = True) -> CallGraph:
         """The CG (and optionally CFG) extraction method.
 

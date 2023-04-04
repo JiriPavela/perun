@@ -9,8 +9,8 @@ from angr.knowledge_plugins.functions.function import Function as AngrFunction
 
 from perun.logic.call_graph.extractors import CGExtractor
 from perun.logic.call_graph.structs import CGFlavour, CGLayer
-from perun.logic.call_graph.cg import CallGraph
-from perun.logic.call_graph.cfg import FuncCFG, CFGNodeBB, CFGNodeFunc
+from perun.logic.call_graph.graphs.cg import CallGraph
+from perun.logic.call_graph.graphs.cfg import FuncCFG, CFGNodeBB, CFGNodeFunc
 from perun.logic.call_graph.archs import SupportedArchs, architectures
 
 if TYPE_CHECKING:

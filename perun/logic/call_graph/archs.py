@@ -64,7 +64,7 @@ class ArchInfo(ABC):
     :ivar _gp_registers_ext: extended general-purpose registers
     """
 
-    __slots__ = "_arch", "_jump_instr", "_gp_registers", "_gp_registers_ext"
+    __slots__ = "_arch", "_jump_instr", "_gp_registers_basic", "_gp_registers_ext", "_gp_registers"
 
     @abstractmethod
     def __init__(self) -> None:
@@ -74,9 +74,10 @@ class ArchInfo(ABC):
         initialized based on the actual architecture specifics.
         """
         self._arch: SupportedArchs
-        self._jump_instr: set[str] = set()
-        self._gp_registers: set[str] = set()
-        self._gp_registers_ext: set[str] = set()
+        self._jump_instr: set[str]
+        self._gp_registers_basic: set[str]
+        self._gp_registers_ext: set[str]
+        self._gp_registers: set[str]
 
     @property
     def arch(self) -> SupportedArchs:
@@ -95,12 +96,12 @@ class ArchInfo(ABC):
         return self._jump_instr
 
     @property
-    def gp_registers(self) -> set[str]:
+    def gp_registers_basic(self) -> set[str]:
         """Get the architecture's basic general purpose registers.
 
         :return: the basic general purpose registers.
         """
-        return self._gp_registers
+        return self._gp_registers_basic
 
     @property
     def gp_registers_ext(self) -> set[str]:
@@ -111,6 +112,14 @@ class ArchInfo(ABC):
         :return: the extended general purpose registers.
         """
         return self._gp_registers_ext
+
+    @property
+    def gp_registers(self) -> set[str]:
+        """Get the architecture's complete set of general purpose registers.
+
+        :return: all general purpose registers.
+        """
+        return self._gp_registers
 
 
 class ArchX8664(ArchInfo):
@@ -124,8 +133,9 @@ class ArchX8664(ArchInfo):
             "jnge", "jng", "ja", "jae", "jnbe", "jnb", "jb", "jbe", "jnae", "jna", "jxcz", "jc",
             "jnc", "jo", "jno", "jp", "jpe", "jnp", "jpo", "js", "jns",
         }
-        self._gp_registers = self._build_gp_registers()
+        self._gp_registers_basic = self._build_gp_registers()
         self._gp_registers_ext = self._build_extended_gp_registers()
+        self._gp_registers = self._gp_registers_basic | self._gp_registers_ext
 
     @staticmethod
     def _build_gp_registers() -> set[str]:

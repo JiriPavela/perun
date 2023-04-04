@@ -42,7 +42,7 @@ from collections.abc import Iterator
 
 import networkx as nx
 
-from perun.logic.call_graph.cfg import FuncCFG
+from perun.logic.call_graph.graphs.cfg import FuncCFG
 from perun.logic.call_graph.structs import (
     CallGraphError,
     CGFlavour,

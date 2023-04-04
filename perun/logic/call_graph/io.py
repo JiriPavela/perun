@@ -28,8 +28,8 @@ from perun.collect.identification import CollectCompoundId
 from perun.logic.stats import StatsFile
 
 from perun.logic.call_graph import CallGraphManager
-from perun.logic.call_graph.cg import CallGraph
-from perun.logic.call_graph.cfg import FuncCFG, CFGNode, CFGNodeBB, CFGNodeFunc
+from perun.logic.call_graph.graphs.cg import CallGraph
+from perun.logic.call_graph.graphs.cfg import FuncCFG, CFGNode, CFGNodeBB, CFGNodeFunc
 from perun.logic.call_graph.path import CallGraphPath
 from perun.logic.call_graph.version import FileChangeDetail, CGVersion
 from perun.logic.call_graph.structs import (
