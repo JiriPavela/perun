@@ -5,7 +5,7 @@ not the whole program. Interprocedurality can be achieved in combination with a 
 each function has a link to its corresponding CFG.
 """
 from __future__ import annotations
-from typing import Generic, TypeVar, Any, overload
+from typing import Generic, TypeVar, Any, overload, Union
 from collections.abc import Iterator
 from abc import ABC, abstractmethod
 from itertools import zip_longest
@@ -20,23 +20,28 @@ from perun.logic.call_graph.structs import BasicBlock, BlockEq, CFGNodeType, CFG
 FuncRenameMap = dict[str, str]
 # CFG node equivalence cache. The tuples represent addresses of compared nodes.
 CFGNodeCache = dict[tuple[int, int], bool]
+# CFG summary as tuple:
+# - number of basic block nodes,
+# - number of function nodes,
+# - number of CFG edges,
+# - number of instructions in CFG,
+# - maximum number of instructions in a basic block.
+CFGSummaryTuple = tuple[int, int, int, int, int]
 
 
 # Type variables for CFG node representation
 T = TypeVar("T", BasicBlock, str)
-T_co = TypeVar("T_co", BasicBlock, str, covariant=True)
+# Type variable for default value
+DefT = TypeVar("DefT")
 
 # We can't use bound="CFGNode[T]" and Any is a known workaround:
 # https://github.com/python/mypy/issues/11910
 CFGNodeT = TypeVar("CFGNodeT", bound="CFGNode[Any]")
-CFGNodeT1 = TypeVar("CFGNodeT1", bound="CFGNode[Any]")
-CFGNodeT2 = TypeVar("CFGNodeT2", bound="CFGNode[Any]")
-
-# Type variable for default value
-DefT = TypeVar("DefT")
+# CFG node variants. This explicit alias makes type checking easier than typevar with a bound.
+CFGNodeVariant = Union["CFGNodeBB", "CFGNodeFunc"]
 
 
-class CFGNode(ABC, Generic[T_co]):
+class CFGNode(ABC, Generic[T]):
     """CFG node abstract representation.
 
     The node needs to know its address, size and data (e.g., instructions in a basic block).
@@ -48,7 +53,7 @@ class CFGNode(ABC, Generic[T_co]):
 
     __slots__ = "addr", "size", "data"
 
-    def __init__(self, address: int, size: int, data: T_co) -> None:
+    def __init__(self, address: int, size: int, data: T) -> None:
         """Initializer.
 
         :param address: the node's address.
@@ -57,7 +62,7 @@ class CFGNode(ABC, Generic[T_co]):
         """
         self.addr: int = address
         self.size: int = size
-        self.data: T_co = data
+        self.data: T = data
 
     def __str__(self) -> str:
         """String representation of a CFG node.
@@ -95,7 +100,7 @@ class CFGNode(ABC, Generic[T_co]):
     def next_block(self) -> int:
         """Compute address of the expected subsequent node in memory.
 
-        This is important when determining the type of a CFG edge. Note that the address may in
+        This is important when determining the type of CFG edge. Note that the address may in
         fact be invalid as there may be no node on this address.
 
         :return: expected address of the next CFG node in memory.
@@ -206,7 +211,7 @@ class CFGNodeFunc(CFGNode[str]):
         """Equality check for function nodes.
 
         Since function names can change throughout the program development, the equality checking
-        should take that into account. Hence the checking can be made less strict when rename
+        should take that into account. Hence, the checking can be made less strict when rename
         mapping is provided.
 
         :param other: the other CFG node.
@@ -237,7 +242,9 @@ class CFGEdge:
 
     __slots__ = "source", "dest", "type"
 
-    def __init__(self, source: CFGNodeT1, dest: CFGNodeT2, edge_type: CFGEdgeType) -> None:
+    def __init__(
+        self, source: CFGNodeVariant, dest: CFGNodeVariant, edge_type: CFGEdgeType
+    ) -> None:
         """Initializer.
 
         :param source: the source node.
@@ -270,7 +277,6 @@ class CFGEdge:
         addresses and if the block has a CONTINUE edge, that edge will be at the top.
 
         :param other: the other CFG edge we are comparing to.
-
         :return: True if this edge is less than the other edge, False otherwise.
         """
         if not isinstance(other, CFGEdge):
@@ -329,6 +335,97 @@ class CFGEdge:
         return src_eq and dst_eq
 
 
+class FuncCFGSummary:
+    """A function CFG summary.
+
+    Summary is a high-level representation of function CFG. As CFG comparison can be quite
+    expensive, the summary may be used to quickly evaluate whether the CFG comparison can be
+    possibly skipped. A summary may also be used as a similarity measure for fast algorithms with
+    limited precision.
+
+    A CFG summary consists of:
+
+    :ivar no_bb: number of basic block nodes.
+    :ivar no_func: number of function nodes.
+    :ivar no_edges: total number of edges.
+    :ivar no_instr: total number of instructions.
+    :ivar max_instr: the largest basic block in terms of instruction count.
+    """
+
+    __slots__ = "no_bb", "no_func", "no_edges", "no_instr", "max_instr"
+
+    def __init__(self) -> None:
+        """Initializer. Initializes a default summary representing an empty CFG."""
+        self.no_bb: int = 0
+        self.no_func: int = 0
+        self.no_edges: int = 0
+        self.no_instr: int = 0
+        self.max_instr: int = 0
+
+    @classmethod
+    def from_graph(cls, graph: nx.DiGraph) -> FuncCFGSummary:
+        """Alternative initializer. Computes the summary components from the given CFG.
+
+        :param graph: the CFG for which to compute the summary.
+
+        :return: An initialized summary corresponding to the CFG.
+        """
+        summary = cls()
+        node: CFGNodeVariant
+        for _, node in graph.nodes(data="details"):
+            summary.update(node)
+        summary.no_edges = graph.size()
+        return summary
+
+    def __bool__(self) -> bool:
+        """Boolean representation of a summary.
+
+        :return: True if the summary represents a non-empty CFG, False otherwise.
+        """
+        return self.no_bb == self.no_func == self.no_edges == self.no_instr == self.max_instr == 0
+
+    def __hash__(self) -> int:
+        """Computes a hash representation of the summary.
+
+        The hash is computed using the summary attributes.
+
+        :return: hash value of the summary.
+        """
+        return hash(self.as_tuple())
+
+    def __eq__(self, other: object) -> bool:
+        """Equivalence function of summaries.
+
+        The summaries are compared on per-element basis.
+
+        :param other: the other summary to compare.
+
+        :return: True if the summaries are equal, False otherwise.
+        """
+        if isinstance(other, FuncCFGSummary):
+            return self.as_tuple() == other.as_tuple()
+        return NotImplemented
+
+    def update(self, node: CFGNodeVariant) -> None:
+        """Update the summary according to a newly inserted CFG node.
+
+        :param node: the newly inserted node.
+        """
+        if node.type == CFGNodeType.FUNC:
+            self.no_func += 1
+        else:
+            self.no_bb += 1
+            self.no_instr += len(node.data)
+            self.max_instr = max(self.max_instr, len(node.data))
+
+    def as_tuple(self) -> CFGSummaryTuple:
+        """Transform the summary object into a tuple representation.
+
+        :return: the CFG summary as tuple of values.
+        """
+        return self.no_bb, self.no_func, self.no_edges, self.no_instr, self.max_instr
+
+
 class FuncCFG:
     """A representation of function's Control Flow Graph (CFG).
 
@@ -340,9 +437,10 @@ class FuncCFG:
     :ivar _entrypoint: address of the CFG entry node.
     :ivar _architecture: CPU architecture. Required for correct CFG and BB analysis.
     :ivar graph: the internal representation of the CFG.
+    :ivar summary: A CFG summary.
     """
 
-    __slots__ = ["_entrypoint", "_architecture", "graph"]
+    __slots__ = "_entrypoint", "_architecture", "graph", "summary"
 
     def __init__(
         self, entrypoint: int, architecture: SupportedArchs, graph: nx.DiGraph | None = None
@@ -356,6 +454,7 @@ class FuncCFG:
         self._entrypoint: int = entrypoint
         self._architecture: SupportedArchs = architecture
         self.graph: nx.DiGraph = graph if graph is not None else nx.DiGraph()
+        self.summary: FuncCFGSummary = FuncCFGSummary.from_graph(self.graph)
 
     def __iter__(self) -> Iterator[CFGEdge]:
         """CFG iteration.
@@ -365,10 +464,10 @@ class FuncCFG:
 
         The traversal starts in the entrypoint node and continues through the highest-priority
         outgoing edge in the current node. The edge priority is determined by the edge ordering.
-        In general, the CONTINUE edges have highest priority since it is guaranteed that there can
-        be no more than one such outgoing edge from a single node. Whenever the traversal reaches
-        a node that has no outgoing edge, or the destination node has already been visited, the
-        traversal backtracks to the previous node and its remaining outgoing edges.
+        In general, the CONTINUE edges have the highest priority since it is guaranteed that there
+        can be no more than one such outgoing edge from a single node. Whenever the traversal
+        reaches a node that has no outgoing edge, or the destination node has already been visited,
+        the traversal backtracks to the previous node and its remaining outgoing edges.
 
         :return: iterator of CFG edges in a deterministic order.
         """
@@ -383,7 +482,7 @@ class FuncCFG:
                 # Subsequent iterations: get the next edge in LIFO order
                 current_edge = edge_stack.pop()
                 yield current_edge
-                # Skip the successor if it has already been visited. Otherwise expand its edges.
+                # Skip the successor if it has already been visited. Otherwise, expand its edges.
                 if current_edge.dest.addr in visited:
                     continue
                 current_node = current_edge.dest
@@ -412,14 +511,14 @@ class FuncCFG:
         return self.graph.has_edge(*element)
 
     @overload
-    def __getitem__(self, item: int) -> CFGNode[T]:
+    def __getitem__(self, item: int) -> CFGNodeVariant:
         ...
 
     @overload
     def __getitem__(self, item: tuple[int, int]) -> CFGEdge:
         ...
 
-    def __getitem__(self, element: int | tuple[int, int]) -> CFGNode[T] | CFGEdge:
+    def __getitem__(self, element: int | tuple[int, int]) -> CFGNodeVariant | CFGEdge:
         """Get CFG node or edge if they are in the CFG.
 
         If the requested item is not in the CFG, a KeyError is raised.
@@ -436,12 +535,39 @@ class FuncCFG:
             self.graph.edges[element]["type"],
         )
 
+    def nodes_traversal(self) -> Iterator[CFGNodeVariant]:
+        """CFG nodes iterator in CFG traversal order.
+
+        The CFG nodes are provided in the CFG traversal order. See the __iter__ method for more
+        details.
+
+        :return: An iterator over CFG nodes in CFG traversal order.
+        """
+        visited = set()
+        for edge in self:
+            for node in (edge.source, edge.dest):
+                if node.addr not in visited:
+                    visited.add(node.addr)
+                    yield node
+
+    def nodes(self) -> Iterator[CFGNodeVariant]:
+        """CFG nodes iterator in arbitrary order.
+
+        The nodes will likely be provided in the order of their insertion, as networkx utilizes
+        dictionaries which, since Python 3.7, are required to preserve the order of elements
+        insertion. However, do not rely upon this networkx implementation detail.
+
+        :return: An iterator over CFG nodes in arbitrary order.
+        """
+        for _, node in self.graph.nodes(data="details"):
+            yield node
+
     @overload
-    def get(self, element: int) -> CFGNode[T] | None:
+    def get(self, element: int) -> CFGNodeVariant | None:
         ...
 
     @overload
-    def get(self, element: int, default: DefT) -> CFGNode[T] | DefT:
+    def get(self, element: int, default: DefT) -> CFGNodeVariant | DefT:
         ...
 
     @overload
@@ -454,7 +580,7 @@ class FuncCFG:
 
     def get(
         self, element: int | tuple[int, int], default: DefT | None = None
-    ) -> CFGNode[T] | CFGEdge | DefT | None:
+    ) -> CFGNodeVariant | CFGEdge | DefT | None:
         """Get CFG node or edge if they exist, default otherwise.
 
         This method never raises KeyError and instead returns the default value if the node or edge
@@ -491,7 +617,7 @@ class FuncCFG:
         """
         return self._architecture
 
-    def add_node(self, node_data: CFGNode[T]) -> None:
+    def add_node(self, node_data: CFGNodeVariant) -> None:
         """Add a new CFG node.
 
         The actual node can be any subclass of the CFGNode class, e.g., a basic block, function
@@ -499,6 +625,8 @@ class FuncCFG:
 
         :param node_data: the node details (e.g., basic block disassembly or function name).
         """
+        if node_data.addr not in self.graph.nodes:
+            self.summary.update(node_data)
         self.graph.add_node(node_data.addr, details=node_data)
 
     def add_flow(self, source: int, dest: int, edge_type: CFGEdgeType | None = None) -> bool:
@@ -522,6 +650,7 @@ class FuncCFG:
                     else CFGEdgeType.JUMP
                 )
             self.graph.add_edge(source, dest, type=edge_type)
+            self.summary.no_edges += 1
             return True
         return False
 
