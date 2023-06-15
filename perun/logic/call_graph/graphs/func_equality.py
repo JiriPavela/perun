@@ -5,6 +5,10 @@ from collections.abc import ItemsView
 from typing import Literal
 
 
+# Equality criteria classes usually have only the __call__ public method, this is by design.
+# pylint: disable=too-few-public-methods
+
+
 class KnownRenames:
     """A strict equivalence criterion that, however, allows to specify known renames.
 
@@ -93,7 +97,7 @@ class AdaptiveRenames(KnownRenames):
         return self._candidate_renames.items()
 
 
-def ignore_func_names(_: str, __: str) -> Literal[True]:
+def eq_func_ignore_names(_: str, __: str) -> Literal[True]:
     """A permissive function name equivalence criterion.
 
     Every two compared function names are evaluated as equal.

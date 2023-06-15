@@ -4,7 +4,7 @@ used by other CG modules.
 
 from __future__ import annotations
 
-from typing import Literal, Union, Protocol, Any
+from typing import Literal, Union, Protocol
 from collections.abc import Iterator, Set, Iterable, Sequence
 from enum import Enum
 
@@ -17,7 +17,7 @@ from perun.utils.containers import InverseSetMapping
 
 # Specifies a set of valid CG states - the '*' is used for glob lookup patterns.
 ValidStates = Literal["c", "d", "*"]
-# Dynamic CG entry points (i.e., top-level function of a, possibly optimized, profiling run)
+# Dynamic CG entry points (i.e., top-level function of, possibly optimized, profiling run)
 # Dynamic (un)optimized layers -> set of entry points
 CGDynEntryPoints = Union[dict["CGLayer", Set[str]], Iterable[tuple["CGLayer", Set[str]]]]
 
@@ -74,7 +74,7 @@ class BlockEq(Protocol):
     Allows to specify more or less strict equivalence criterion when comparing two basic blocks.
     """
 
-    def __call__(self, block: BasicBlock, block_other: BasicBlock, **kwargs: Any) -> bool:
+    def __call__(self, block: BasicBlock, block_other: BasicBlock) -> bool:
         ...
 
 

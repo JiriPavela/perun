@@ -12,7 +12,7 @@ from itertools import zip_longest
 
 import networkx as nx
 
-from perun.logic.call_graph.archs import SupportedArchs, ArchInfo, architectures
+from perun.logic.call_graph.archs import SupportedArchs
 from perun.logic.call_graph.structs import BasicBlock, BlockEq, FuncEq, CFGNodeType, CFGEdgeType
 
 
@@ -146,7 +146,6 @@ class CFGNodeBB(CFGNode[BasicBlock]):
         self,
         other: CFGNodeT,
         block_eq: BlockEq | None = None,
-        arch: ArchInfo | None = None,
         **kwargs: Any,
     ) -> bool:
         """Equality check for basic blocks.
@@ -158,7 +157,6 @@ class CFGNodeBB(CFGNode[BasicBlock]):
         :param other: the other CFG node.
         :param block_eq: custom equivalence criterion. If not provided, perfect equivalence will
                          be tested instead.
-        :param arch: CPU architecture specification.
         :param kwargs: additional parameters (useful for potential subclassing).
 
         :return: True if the basic blocks are considered equivalent (possibly under the equivalence
@@ -168,7 +166,7 @@ class CFGNodeBB(CFGNode[BasicBlock]):
             return False
         if block_eq is None:
             return self.data == other.data
-        return block_eq(self.data, other.data, arch=arch)
+        return block_eq(self.data, other.data)
 
 
 class CFGNodeFunc(CFGNode[str]):
@@ -286,7 +284,6 @@ class CFGEdge:
         other: CFGEdge,
         func_eq: FuncEq | None = None,
         block_eq: BlockEq | None = None,
-        arch: ArchInfo | None = None,
         cache: CFGNodeCache | None = None,
     ) -> bool:
         """Edges equality check.
@@ -302,7 +299,6 @@ class CFGEdge:
         :param other: the other edge.
         :param func_eq: a custom function names equivalence function.
         :param block_eq: a custom equivalence criterion for basic block comparison.
-        :param arch: CPU architecture specification.
         :param cache: the nodes comparison cache.
 
         :return: True if the edges can be considered equal, False otherwise.
@@ -316,12 +312,8 @@ class CFGEdge:
             src_cache = cache.get((self.source.addr, other.source.addr), False)
             dest_cache = cache.get((self.dest.addr, other.dest.addr), False)
         # Compare the uncached nodes
-        src_eq = src_cache or self.source.is_equal(
-            other.source, func_eq=func_eq, block_eq=block_eq, arch=arch
-        )
-        dst_eq = dest_cache or self.dest.is_equal(
-            other.dest, func_eq=func_eq, block_eq=block_eq, arch=arch
-        )
+        src_eq = src_cache or self.source.is_equal(other.source, func_eq=func_eq, block_eq=block_eq)
+        dst_eq = dest_cache or self.dest.is_equal(other.dest, func_eq=func_eq, block_eq=block_eq)
         # Update the cache if possible
         if cache is not None:
             cache[(self.source.addr, other.source.addr)] = src_eq
@@ -675,14 +667,11 @@ class FuncCFG:
         edge: CFGEdge | None
         other_edge: CFGEdge | None
         cache: CFGNodeCache = {}
-        arch: ArchInfo = architectures[self._architecture]
         for edge, other_edge in zip_longest(self, other):
             if (
                 edge is None
                 or other_edge is None
-                or not edge.is_equal(
-                    other_edge, func_eq=func_eq, block_eq=block_eq, arch=arch, cache=cache
-                )
+                or not edge.is_equal(other_edge, func_eq=func_eq, block_eq=block_eq, cache=cache)
             ):
                 return False
         return True
