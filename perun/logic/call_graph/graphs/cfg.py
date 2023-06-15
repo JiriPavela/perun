@@ -13,11 +13,9 @@ from itertools import zip_longest
 import networkx as nx
 
 from perun.logic.call_graph.archs import SupportedArchs, ArchInfo, architectures
-from perun.logic.call_graph.structs import BasicBlock, BlockEq, CFGNodeType, CFGEdgeType
+from perun.logic.call_graph.structs import BasicBlock, BlockEq, FuncEq, CFGNodeType, CFGEdgeType
 
 
-# CFG Function block rename mapping: current name -> other name
-FuncRenameMap = dict[str, str]
 # CFG node equivalence cache. The tuples represent addresses of compared nodes.
 CFGNodeCache = dict[tuple[int, int], bool]
 # CFG summary as tuple:
@@ -205,28 +203,24 @@ class CFGNodeFunc(CFGNode[str]):
         """
         return CFGNodeType.FUNC
 
-    def is_equal(
-        self, other: CFGNodeT, renames: FuncRenameMap | None = None, **kwargs: Any
-    ) -> bool:
+    def is_equal(self, other: CFGNodeT, func_eq: FuncEq | None = None, **kwargs: Any) -> bool:
         """Equality check for function nodes.
 
         Since function names can change throughout the program development, the equality checking
-        should take that into account. Hence, the checking can be made less strict when rename
-        mapping is provided.
+        should take that into account. Hence, the checking can be made less strict with a custom
+        name equivalence function that supports renames.
 
         :param other: the other CFG node.
-        :param renames: functions rename mapping.
+        :param func_eq: a function names equivalence function.
         :param kwargs: additional parameters (useful for potential subclassing).
 
         :return: True if the function nodes are considered equivalent, False otherwise.
         """
         if self.type != other.type:
             return False
-        if renames is None:
+        if func_eq is None:
             return self.data == other.data
-        if self.data != other.data and self.data not in renames:
-            renames[self.data] = other.data
-        return renames[self.data] == other.data
+        return func_eq(self.data, other.data)
 
 
 class CFGEdge:
@@ -290,7 +284,7 @@ class CFGEdge:
     def is_equal(
         self,
         other: CFGEdge,
-        renames: FuncRenameMap | None = None,
+        func_eq: FuncEq | None = None,
         block_eq: BlockEq | None = None,
         arch: ArchInfo | None = None,
         cache: CFGNodeCache | None = None,
@@ -306,8 +300,8 @@ class CFGEdge:
         supports caching.
 
         :param other: the other edge.
-        :param renames: functions rename mapping.
-        :param block_eq: custom equivalence criterion for nodes comparison.
+        :param func_eq: a custom function names equivalence function.
+        :param block_eq: a custom equivalence criterion for basic block comparison.
         :param arch: CPU architecture specification.
         :param cache: the nodes comparison cache.
 
@@ -323,10 +317,10 @@ class CFGEdge:
             dest_cache = cache.get((self.dest.addr, other.dest.addr), False)
         # Compare the uncached nodes
         src_eq = src_cache or self.source.is_equal(
-            other.source, renames=renames, block_eq=block_eq, arch=arch
+            other.source, func_eq=func_eq, block_eq=block_eq, arch=arch
         )
         dst_eq = dest_cache or self.dest.is_equal(
-            other.dest, renames=renames, block_eq=block_eq, arch=arch
+            other.dest, func_eq=func_eq, block_eq=block_eq, arch=arch
         )
         # Update the cache if possible
         if cache is not None:
@@ -655,24 +649,24 @@ class FuncCFG:
         return False
 
     def is_equal(
-        self, other: FuncCFG, renames: FuncRenameMap | None = None, block_eq: BlockEq | None = None
+        self, other: FuncCFG, func_eq: FuncEq | None = None, block_eq: BlockEq | None = None
     ) -> bool:
         """Compare two CFGs and determine if they are equivalent.
 
-        By default:
+        By default,
          1) The equivalence criterion for two basic blocks requires total equality of their
             instruction lists. For more lenient comparison, custom block equivalence function may
             be supplied.
          2) The equivalence criterion for two function call nodes requires equality of the function
-            names. More accurate comparison can be achieved by supplying a mapping of function
-            renames.
+            names. More accurate comparison can be achieved by supplying a custom name equivalence
+            function that supports renames mapping.
 
         :param other: the other CFG.
-        :param renames: the function rename mapping.
-        :param block_eq: the block equivalence criterion function.
+        :param func_eq: a function name equivalence function.
+        :param block_eq: a basic block equivalence function.
 
-        :return: True if the CFGs are considered equal under the provided name mappings and
-                 equivalence function, False otherwise.
+        :return: True if the CFGs are considered equal under the provided equivalence functions,
+                 False otherwise.
         """
         # Basic property checks (graph order and nodes degree).
         if not nx.faster_could_be_isomorphic(self.graph, other.graph):
@@ -687,7 +681,7 @@ class FuncCFG:
                 edge is None
                 or other_edge is None
                 or not edge.is_equal(
-                    other_edge, renames=renames, block_eq=block_eq, arch=arch, cache=cache
+                    other_edge, func_eq=func_eq, block_eq=block_eq, arch=arch, cache=cache
                 )
             ):
                 return False

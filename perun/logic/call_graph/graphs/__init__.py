@@ -14,6 +14,11 @@ from perun.logic.call_graph.graphs.bb_equality import (
     eq_bb_register_bijection,
     eq_bb_operands_register_bijection,
 )
+from perun.logic.call_graph.graphs.func_equality import (
+    KnownRenames,
+    AdaptiveRenames,
+    ignore_func_names,
+)
 from perun.logic.call_graph.graphs.cg import CallGraph, CallGraphView
 
 
@@ -29,6 +34,9 @@ __all__ = [
     "eq_bb_operands",
     "eq_bb_register_bijection",
     "eq_bb_operands_register_bijection",
+    "KnownRenames",
+    "AdaptiveRenames",
+    "ignore_func_names",
     "CallGraph",
     "CallGraphView",
 ]

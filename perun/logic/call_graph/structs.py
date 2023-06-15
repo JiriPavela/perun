@@ -78,6 +78,18 @@ class BlockEq(Protocol):
         ...
 
 
+class FuncEq(Protocol):
+    """Generic equivalence criterion for function names comparison.
+
+    The equivalence criterion is expected to be used by the CFG and/or CG equivalence checking. As
+    program function names are expected to sometimes change, a correctly selected equivalence
+    criterion can help achieve more precise comparison.
+    """
+
+    def __call__(self, name: str, other_name: str) -> bool:
+        ...
+
+
 class CGFlavour(OrderedEnum):
     """Call graph flavours enumeration.
 
@@ -799,28 +811,3 @@ class CGEntryPoints:
         if (remove and is_in) or (not remove and not is_in):
             tracker.register(layer)
             action(layer, entry_point)
-
-
-class FunctionRenames:
-    def __init__(self, matching_names: set[str], new_names: set[str], missing_names: set[str]) -> None:
-        self.name_mapping: dict[str, str] = {name: name for name in matching_names}
-        self.new: set[str] = new_names
-        self.missing: set[str] = missing_names
-        self._rename_candidates: dict[str, set[str]] = {}
-
-    def __contains__(self, item: str) -> bool:
-        return item in self.name_mapping
-
-    def __getitem__(self, item: str) -> str | None:
-        return self.name_mapping.get(item)
-
-    def __setitem__(self, key: str, value: str) -> None:
-        # Note that we do not allow overwrite here
-        if key not in self.name_mapping:
-            self.name_mapping[key] = value
-
-    def add_possible_rename(self, of: str, to: str) -> None:
-        self._rename_candidates.setdefault(of, set()).add(to)
-
-
-
