@@ -11,6 +11,8 @@ from __future__ import annotations
 from enum import Enum
 from abc import ABC, abstractmethod
 
+from perun.logic.call_graph.structs import Cacher
+
 
 class SupportedArchs(Enum):
     """Currently supported CPU architectures."""
@@ -56,7 +58,7 @@ class SupportedArchs(Enum):
 class ArchInfo(ABC):
     """The abstract representation of a CPU architecture.
 
-    The individual attributes have a read-only access to prevent unintentional modification.
+    The individual attributes have read-only access to prevent unintentional modification.
 
     :ivar _arch: architecture identification
     :ivar _jump_instr: all known jump instructions
@@ -74,10 +76,10 @@ class ArchInfo(ABC):
         initialized based on the actual architecture specifics.
         """
         self._arch: SupportedArchs
-        self._jump_instr: set[str]
-        self._gp_registers_basic: set[str]
-        self._gp_registers_ext: set[str]
-        self._gp_registers: set[str]
+        self._jump_instr: set[str] = set()
+        self._gp_registers_basic: set[str] = set()
+        self._gp_registers_ext: set[str] = set()
+        self._gp_registers: set[str] = set()
 
     @property
     def arch(self) -> SupportedArchs:
@@ -205,40 +207,19 @@ class ArchX8664(ArchInfo):
         return registers
 
 
-class ArchManager:
+class ArchManager(Cacher[SupportedArchs, ArchInfo]):
     """Architecture manager class.
 
     It is recommended to obtain concrete architecture instances through the manager class, as it
     ensures the instances will be singletons.
-
-    :ivar _archs: the name -> instance mapping.
     """
 
-    __slots__ = ["_archs"]
-
-    def __init__(self) -> None:
-        """Initializer."""
-        self._archs: dict[SupportedArchs, ArchInfo] = {}
-
-    def __contains__(self, item: SupportedArchs) -> bool:
-        """Membership test.
-
-        :return: True if a concrete architecture is already instantiated, False otherwise.
-        """
-        return item in self._archs
-
     def __getitem__(self, item: SupportedArchs) -> ArchInfo:
-        """Get architecture instance.
-
-        :param item: the requested architecture.
-
-        :return: the corresponding architecture instance.
-        """
         try:
-            return self._archs[item]
+            return self._cache[item]
         except KeyError:
             # The architecture is not instantiated yet
-            return self._archs.setdefault(item, item.as_object())
+            return self._cache.setdefault(item, item.as_object())
 
 
 # An architecture manager instance that behaves like a singleton

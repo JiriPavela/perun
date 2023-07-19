@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Callable, ClassVar
+from typing import Callable, ClassVar, Type
 from abc import ABC, abstractmethod
 
 import re
 
-from perun.logic.call_graph.structs import BasicBlock
-from perun.logic.call_graph.archs import ArchInfo
+from perun.logic.call_graph.structs import BasicBlock, Cacher
+from perun.logic.call_graph.archs import ArchInfo, SupportedArchs, architectures
 
 
 # Equality criteria classes usually have only the __call__ public method, this is by design.
 # pylint: disable=too-few-public-methods
+
+# The equivalence cache key is a tuple of architecture specification and an equivalence class
+EqCacheKey = tuple[SupportedArchs, Type["ArchBasedEq"]]
 
 
 def eq_bb_length(block: BasicBlock, other_block: BasicBlock) -> bool:
@@ -210,3 +213,22 @@ class EqBBOperandsRegisterBijection(ArchBasedEq):
             ):
                 return False
         return True
+
+
+class EqManager(Cacher[EqCacheKey, ArchBasedEq]):
+    """Equivalence criterion manager class.
+
+    Used to store actual equivalence class instances to avoid their repeated construction.
+    """
+
+    def __getitem__(self, item: EqCacheKey) -> ArchBasedEq:
+        try:
+            return self._cache[item]
+        except KeyError:
+            # The equivalence is not instantiated yet
+            arch, arch_eq_cls = item
+            return self._cache.setdefault(item, arch_eq_cls(architectures[arch]))
+
+
+# An equivalence manager instance that behaves like a singleton
+eq_cache = EqManager()

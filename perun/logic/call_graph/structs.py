@@ -4,16 +4,19 @@ used by other CG modules.
 
 from __future__ import annotations
 
-from typing import Literal, Union, Protocol
+from typing import Literal, Union, Protocol, Generic, TypeVar
 from collections.abc import Iterator, Set, Iterable, Sequence
 from enum import Enum
+from abc import ABC, abstractmethod
 
 import networkx as nx
-
 
 from perun.utils.structs import OrderedEnum
 from perun.utils.containers import InverseSetMapping
 
+
+VT = TypeVar("VT")
+KT = TypeVar("KT")
 
 # Specifies a set of valid CG states - the '*' is used for glob lookup patterns.
 ValidStates = Literal["c", "d", "*"]
@@ -73,6 +76,8 @@ class BlockEq(Protocol):
 
     Allows to specify more or less strict equivalence criterion when comparing two basic blocks.
     """
+    # Equality criteria interface has only the __call__ public method, this is by design.
+    # pylint: disable=too-few-public-methods
 
     def __call__(self, block: BasicBlock, block_other: BasicBlock) -> bool:
         ...
@@ -85,6 +90,8 @@ class FuncEq(Protocol):
     program function names are expected to sometimes change, a correctly selected equivalence
     criterion can help achieve more precise comparison.
     """
+    # Equality criteria interface has only the __call__ public method, this is by design.
+    # pylint: disable=too-few-public-methods
 
     def __call__(self, name: str, other_name: str) -> bool:
         ...
@@ -117,11 +124,11 @@ class CGFlavour(OrderedEnum):
         return _CGF_REQ_MAP[self]
 
     def dep_changes(self) -> set[CGFlavour]:
-        """Determines which flavours are dependant on this one.
+        """Determines which flavours are dependent on this one.
 
         Modifying a structure of some CG flavour F can cause inconsistencies in derived (or
         dependant) flavours F1, F2, ... Hence we provide a mapping of flavours that are affected
-        by changes in each flavours.
+        by changes in each flavour.
         E.g., when changing the DYNAMIC flavour, the MIXED flavour needs to change accordingly.
 
         :return: a collection of flavours depending on this one.
@@ -193,7 +200,7 @@ class CGLayer:
     statically from a binary file.
 
     As an example, the (flavour, opt) tuple identify nodes and edges that are associated with
-    specific dynamic optimised run(s) "opt_id", and generally form only a subgraph of the whole
+    specific dynamic optimized run(s) "opt_id", and generally form only a subgraph of the whole
     call graph.
 
     :ivar _flavour: the flavour associated with the layer.
@@ -258,9 +265,9 @@ class CGLayer:
     def __lt__(self, other: object) -> bool:
         """Less-than comparison operator.
 
-        The layer order depends on a) layer type, b) layer flavour and c) layer opt, in this exact
-        order. The actual order of different optimizations is insignificant but for the sake of
-        providing a complete ordering, the opts are compared alphabetically.
+        The layer order depends on (a) layer type, (b) layer flavour and (c) layer opt, in this
+        exact order. The actual order of different optimizations is insignificant but for the
+        sake of providing a complete ordering, the opts are compared alphabetically.
 
         :param other: the other layer.
 
@@ -453,11 +460,11 @@ class CGModificationTracker:
 class CGElementLayers:
     """A representation of layers metadata for call graph (CG) elements (node and edges).
 
-    Note that dynamic layers have a bit specific semantics here. Whenever a CG element is associated
-    with an OPT layer (that is, layer with dynamic flavour and optimization ID), the element is
-    automatically associated with a dynamic unoptimized layer as well. This ensures that a general
-    dynamic flavour layer (i.e., CGLayer(DYNAMIC, None)) is available even if an unoptimized run was
-    never actually executed.
+    Note that dynamic layers have a bit of specific semantics here. Whenever a CG element is
+    associated with an OPT layer (that is, layer with dynamic flavour and optimization ID), the
+    element is automatically associated with a dynamic unoptimized layer as well. This ensures that
+    a general dynamic flavour layer (i.e., CGLayer(DYNAMIC, None)) is available even if
+    an unoptimized run was never actually executed.
 
     :ivar _layers: a collection of layers associated with the CG element.
     """
@@ -585,7 +592,7 @@ class CGEntryPoints:
 
     :ivar _graph_ref: a reference to the call graph object.
     :ivar _static: the RAW, STATIC and MIXED entry point.
-    :ivar _dyn: a mapping of dynamic optimization run -> collection of entry points and vice versa.
+    :ivar _dynamic: a mapping of dynamic optimization run -> entry points and vice versa.
     """
 
     __slots__ = "_graph_ref", "_static", "_dynamic"
@@ -811,3 +818,37 @@ class CGEntryPoints:
         if (remove and is_in) or (not remove and not is_in):
             tracker.register(layer)
             action(layer, entry_point)
+
+
+class Cacher(ABC, Generic[KT, VT]):
+    """A module-level singleton template.
+
+    Used to create module-level singleton maps that store objects possibly too expensive to
+    construct everytime they are needed.
+
+    :ivar _cache: the key -> value mapping.
+    """
+
+    __slots__ = ["_cache"]
+
+    def __init__(self) -> None:
+        """Initializer."""
+        self._cache: dict[KT, VT] = {}
+
+    def __contains__(self, item: KT) -> bool:
+        """Membership test.
+
+        :return: True if a value associated with the key is already instantiated, False otherwise.
+        """
+        return item in self._cache
+
+    @abstractmethod
+    def __getitem__(self, item: KT) -> VT:
+        """Get value associated with the key.
+
+        If the key is not in the map, the method should instantiate it.
+
+        :param item: the key.
+
+        :return: the corresponding instance.
+        """
