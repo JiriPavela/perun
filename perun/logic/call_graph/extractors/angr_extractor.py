@@ -143,9 +143,10 @@ class AngrExtractor(CGExtractor):
 
         :param call_graph: the reconstructed CG.
         """
+        # TODO: how to handle optimized functions? E.g., multiple .constprop.X variants?
         assert self.angr_cfg is not None
         cfg_arch = architectures[SupportedArchs.from_name(self._angr_arch)]
-        for func_addr in self._functions_map:
+        for func_addr, func_name in self._functions_map.items():
             # For every function in our CG, we create a separate CFG
             func = self.angr_cfg.kb.functions.get_by_addr(func_addr)
             # Get the function's basic blocks (BB)
@@ -163,7 +164,7 @@ class AngrExtractor(CGExtractor):
             for source, dest in func.transition_graph.edges:
                 cfg.add_flow(source.addr, dest.addr)
             # Register the CFG with the CG function node
-            call_graph.add_element_data(func.name, "cfg", cfg)
+            call_graph.add_element_data(func_name, "cfg", cfg)
 
     @staticmethod
     def _add_cfg_nodes(cfg: FuncCFG, func: AngrFunction, func_blocks: dict[int, AngrBlock]) -> None:

@@ -76,6 +76,7 @@ class BlockEq(Protocol):
 
     Allows to specify more or less strict equivalence criterion when comparing two basic blocks.
     """
+
     # Equality criteria interface has only the __call__ public method, this is by design.
     # pylint: disable=too-few-public-methods
 
@@ -90,6 +91,7 @@ class FuncEq(Protocol):
     program function names are expected to sometimes change, a correctly selected equivalence
     criterion can help achieve more precise comparison.
     """
+
     # Equality criteria interface has only the __call__ public method, this is by design.
     # pylint: disable=too-few-public-methods
 
@@ -403,6 +405,7 @@ class CGModificationTracker:
         layer itself.
 
         Example:
+
             - We want to recalculate the (MIXED, None) layer of the CG:
                 self.next(CGLayer(MIXED, None))
             - The tracked modifications:
@@ -499,12 +502,12 @@ class CGElementLayers:
         return bool(self._layers)
 
     @property
-    def layers(self) -> Iterator[CGLayer]:
+    def layers(self) -> set[CGLayer]:
         """Provide the layers that are associated with the CG element.
 
-        :return: an iterator of CG element layers.
+        :return: CG element layers.
         """
-        return iter(self._layers)
+        return self._layers
 
     @property
     def flavours(self) -> set[CGFlavour]:
@@ -791,10 +794,10 @@ class CGEntryPoints:
             # We are actually changing the static entry point
             if self._static is not None and self._static in self._graph_ref.nodes:
                 # Register all layers of the original entry point, if possible
-                changed |= set(self._graph_ref.nodes[self._static]["meta"].layers)
+                changed |= self._graph_ref.nodes[self._static]["meta"].layers
         if entry_point is not None:
             # Register all layers of the new entry point
-            changed |= set(self._graph_ref.nodes[entry_point]["meta"].layers)
+            changed |= self._graph_ref.nodes[entry_point]["meta"].layers
         # Filter out dynamic layers as they are irrelevant for static entry point
         tracker.register(*[layer for layer in changed if layer.flavour != CGFlavour.DYNAMIC])
         self._static = entry_point

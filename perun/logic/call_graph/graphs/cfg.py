@@ -321,7 +321,7 @@ class CFGEdge:
         return src_eq and dst_eq
 
 
-class FuncCFGSummary:
+class CFGSummary:
     """A function CFG summary.
 
     Summary is a high-level representation of function CFG. As CFG comparison can be quite
@@ -349,7 +349,7 @@ class FuncCFGSummary:
         self.max_instr: int = 0
 
     @classmethod
-    def from_graph(cls, graph: nx.DiGraph) -> FuncCFGSummary:
+    def from_graph(cls, graph: nx.DiGraph) -> CFGSummary:
         """Alternative initializer. Computes the summary components from the given CFG.
 
         :param graph: the CFG for which to compute the summary.
@@ -388,7 +388,7 @@ class FuncCFGSummary:
 
         :return: True if the summaries are equal, False otherwise.
         """
-        if isinstance(other, FuncCFGSummary):
+        if isinstance(other, CFGSummary):
             return self.as_tuple() == other.as_tuple()
         return NotImplemented
 
@@ -440,7 +440,7 @@ class FuncCFG:
         self._entrypoint: int = entrypoint
         self._architecture: SupportedArchs = architecture
         self.graph: nx.DiGraph = graph if graph is not None else nx.DiGraph()
-        self.summary: FuncCFGSummary = FuncCFGSummary.from_graph(self.graph)
+        self.summary: CFGSummary = CFGSummary.from_graph(self.graph)
 
     def __iter__(self) -> Iterator[CFGEdge]:
         """CFG iteration.
@@ -530,11 +530,15 @@ class FuncCFG:
         :return: An iterator over CFG nodes in CFG traversal order.
         """
         visited = set()
-        for edge in self:
+        edge_cnt = -1
+        for edge_cnt, edge in enumerate(self):
             for node in (edge.source, edge.dest):
                 if node.addr not in visited:
                     visited.add(node.addr)
                     yield node
+        if edge_cnt == -1:
+            # The CFG has only a single node which is not part of any edge
+            yield self.graph.nodes[self._entrypoint]["details"]
 
     def nodes(self) -> Iterator[CFGNodeVariant]:
         """CFG nodes iterator in arbitrary order.
@@ -663,15 +667,24 @@ class FuncCFG:
         # Basic property checks (graph order and nodes degree).
         if not nx.faster_could_be_isomorphic(self.graph, other.graph):
             return False
+        # Architecture check
+        if self.architecture != other.architecture:
+            return False
         # Edge by edge detailed comparison
         edge: CFGEdge | None
         other_edge: CFGEdge | None
         cache: CFGNodeCache = {}
-        for edge, other_edge in zip_longest(self, other):
+        edges_cnt = -1
+        for edges_cnt, (edge, other_edge) in enumerate(zip_longest(self, other)):
             if (
                 edge is None
                 or other_edge is None
                 or not edge.is_equal(other_edge, func_eq=func_eq, block_eq=block_eq, cache=cache)
             ):
                 return False
+        # No edges in either CFG, only the entry blocks
+        if edges_cnt == -1:
+            # Compare the entry blocks directly
+            entry_node, entry_node_other = next(self.nodes()), next(other.nodes())
+            return entry_node.is_equal(entry_node_other, func_eq=func_eq, block_eq=block_eq)
         return True

@@ -10,7 +10,7 @@ solved through lazy module importing). This was done to reduce the namespace pol
 manifest when importing directly from the call_graph package through its __init__ file.
 
 Currently, the module implements only JSON (de)serialization. However, the resulting JSON is then
-additionally compressed by the stats module.
+additionally compressed by the stats' module.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from perun.collect.identification import CollectCompoundId
 from perun.logic.stats import StatsFile
 
 from perun.logic.call_graph import CallGraphManager
-from perun.logic.call_graph.graphs.cg import CallGraph
-from perun.logic.call_graph.graphs.cfg import FuncCFG, CFGNode, CFGNodeBB, CFGNodeFunc
+from perun.logic.call_graph.graphs import CallGraph, FuncCFG, CFGNode, CFGNodeBB, CFGNodeFunc
+from perun.logic.call_graph.archs import SupportedArchs
 from perun.logic.call_graph.path import CallGraphPath
 from perun.logic.call_graph.version import FileChangeDetail, CGVersion
 from perun.logic.call_graph.structs import (
@@ -91,7 +91,7 @@ class CGJsonEncoder(json.JSONEncoder):
         if isinstance(o, datetime):
             return o.strftime(TIMESTAMP_FMT)
         if isinstance(o, CollectCompoundId):
-            return {"f": list(o.files), "c": o.conf_name, "o": list(o.opt_ids), "!t": "cid"}
+            return {"c": o.conf_name, "f": list(o.files), "o": list(o.opt_ids), "!t": "cid"}
         if isinstance(o, FileChangeDetail):
             return {
                 "f": o.file,
@@ -128,7 +128,12 @@ class CGJsonEncoder(json.JSONEncoder):
                 "!t": "cg",
             }
         if isinstance(o, FuncCFG):
-            return {"e": o.entrypoint, "g": nx.adjacency_data(o.graph), "!t": "cfg"}
+            return {
+                "e": o.entrypoint,
+                "a": o.architecture,
+                "g": nx.adjacency_data(o.graph),
+                "!t": "cfg",
+            }
         if isinstance(o, CFGNode):
             return {"a": o.addr, "s": o.size, "d": o.data, "!t": f"cgn_{o.type.value}"}
         if isinstance(o, CGElementLayers):
@@ -152,8 +157,8 @@ class CGJsonDecoder(json.JSONDecoder):
     def obj_hook(obj: Any) -> Any:
         """Implement deserialization for CG classes.
 
-        The method uses the '_t' key to determine a) if the JSON element is actually a custom CG
-        object, and 2) the resulting class to construct using the element.
+        The method uses the '_t' key to determine (a) if the JSON element is actually a custom CG
+        object, and (b) the resulting class to construct using the element.
 
         :param obj: the object to deserialize.
 
@@ -163,41 +168,52 @@ class CGJsonDecoder(json.JSONDecoder):
         if "!t" not in obj:
             return obj
         if obj["!t"] == "cid":
-            return CollectCompoundId(obj["c"], {Path(file) for file in obj["f"]}, set(obj["o"]))
+            return CollectCompoundId(
+                collect_config_name=obj["c"],
+                files={Path(file) for file in obj["f"]},
+                optimization_ids=set(obj["o"]),
+            )
         if obj["!t"] == "fchd":
             return FileChangeDetail(
-                Path(obj["f"]),
-                obj["h"],
-                VCSChangeState(obj["s"]),
-                obj.get("sd", ""),
-                obj.get("n", ""),
-                int(obj["fs"]),
-                datetime.strptime(obj["m"], TIMESTAMP_FMT),
+                file=Path(obj["f"]),
+                file_hash=obj["h"],
+                state=VCSChangeState(obj["s"]),
+                state_detail=obj.get("sd", ""),
+                new_file=obj.get("n", ""),
+                file_size=int(obj["fs"]),
+                modify_time=datetime.strptime(obj["m"], TIMESTAMP_FMT),
             )
         if obj["!t"] == "cgv":
             return CGVersion(
-                obj["c"],
-                obj["v"],
-                obj["h"],
-                {Path(src): hsh for src, hsh in obj["s"].items()},
-                datetime.strptime(obj["t"], TIMESTAMP_FMT),
-                VersionState(obj["cs"]),
-                {Path(file): detail for file, detail in obj["ch"].items()},
+                compound_id=obj["c"],
+                minor_version=obj["v"],
+                cg_version_hash=obj["h"],
+                sources={Path(src): hsh for src, hsh in obj["s"].items()},
+                timestamp=datetime.strptime(obj["t"], TIMESTAMP_FMT),
+                change_state=VersionState(obj["cs"]),
+                changes={Path(file): detail for file, detail in obj["ch"].items()},
             )
         if obj["!t"] == "cgl":
             return CGLayer(
-                CGFlavour(obj["f"] if obj["f"] else None), obj["o"] if obj["o"] else None
+                flavour=CGFlavour(obj["f"] if obj["f"] else None),
+                opt=obj["o"] if obj["o"] else None,
             )
         if obj["!t"] == "cg":
-            return CallGraph(nx.adjacency_graph(obj["g"]), obj["s"], obj["d"])
+            return CallGraph(
+                graph=nx.adjacency_graph(obj["g"]), static_entry=obj["s"], dynamic_entry=obj["d"]
+            )
         if obj["!t"] == "cfg":
-            return FuncCFG(obj["e"], nx.adjacency_graph(obj["g"]))
+            return FuncCFG(
+                entrypoint=obj["e"],
+                architecture=SupportedArchs(obj["a"]),
+                graph=nx.adjacency_graph(obj["g"]),
+            )
         if obj["!t"] == f"cgn_{CFGNodeType.BB.value}":
-            return CFGNodeBB(obj["a"], obj["s"], obj["d"])
+            return CFGNodeBB(address=obj["a"], size=obj["s"], data=obj["d"])
         if obj["!t"] == f"cgn_{CFGNodeType.FUNC.value}":
-            return CFGNodeFunc(obj["a"], obj["s"], obj["d"])
+            return CFGNodeFunc(address=obj["a"], size=obj["s"], data=obj["d"])
         if obj["!t"] == "cge":
             return CGElementLayers(*obj["l"])
         if obj["!t"] == "cgm":
-            return CallGraphManager(obj["c"], obj["v"])
+            return CallGraphManager(call_graph=obj["c"], cg_version=obj["v"])
         return obj

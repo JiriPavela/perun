@@ -5,7 +5,7 @@ from perun.logic.call_graph.graphs.cfg import (
     CFGNodeFunc,
     CFGEdge,
     FuncCFG,
-    FuncCFGSummary,
+    CFGSummary,
 )
 from perun.logic.call_graph.graphs.bb_equality import (
     eq_bb_length,
@@ -20,6 +20,7 @@ from perun.logic.call_graph.graphs.func_equality import (
     eq_func_ignore_names,
 )
 from perun.logic.call_graph.graphs.cg import CallGraph, CallGraphView
+from perun.logic.call_graph.graphs.cg_diff import CallGraphDiff, FuncStatus
 
 
 __all__ = [
@@ -27,7 +28,7 @@ __all__ = [
     "CFGNodeBB",
     "CFGNodeFunc",
     "CFGEdge",
-    "FuncCFGSummary",
+    "CFGSummary",
     "FuncCFG",
     "eq_bb_length",
     "eq_bb_instructions",
@@ -39,4 +40,6 @@ __all__ = [
     "eq_func_ignore_names",
     "CallGraph",
     "CallGraphView",
+    "CallGraphDiff",
+    "FuncStatus",
 ]

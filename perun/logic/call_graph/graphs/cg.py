@@ -9,11 +9,11 @@ Glossary:
         more general, but over-approximate too much or completely miss some dynamic dispatch
         calls. Hence, we want to distinguish those different "flavours" of a call graph and be
         able to manipulate them individually and, to a certain degree, independently. Flavours
-        thus describe the type of a call graph based on how it was obtained.
+        thus describe the type of call graph based on how it was obtained.
 
     - Optimization:
         Also sometimes called 'opt', 'opts' or 'optimization run(s)'. Optimizations, in the context
-        of call graphs, refer to profiling runs that are not monitoring all of the possible function
+        of call graphs, refer to profiling runs that are not monitoring all the possible function
         calls within a program, but only a selected subset of available functions. Call graphs
         obtained from optimization runs are generally less precise than call graphs obtained from
         a full profiling run, and are thus considered as a special type  of DYNAMIC flavour call
@@ -39,10 +39,12 @@ Glossary:
 """
 from __future__ import annotations
 from collections.abc import Iterator
+from typing import overload, Literal
 
 import networkx as nx
 
 from perun.logic.call_graph.graphs.cfg import FuncCFG
+from perun.logic.call_graph.graphs.cg_diff import CallGraphDiff
 from perun.logic.call_graph.structs import (
     CallGraphError,
     CGFlavour,
@@ -136,6 +138,156 @@ class CallGraph:
         :return: a collection of supported optimizations.
         """
         return self.entry.optimizations
+
+    def __contains__(self, element: str | tuple[str, str]) -> bool:
+        """Node or edge membership test.
+
+        This membership test checks for presence or absence of a node or edge in the graph
+        structure regardless of their metadata.
+
+        :param element: function name or names of source and destination functions.
+        :return: ``True`` if the graph contains the node or edge, ``False`` otherwise.
+        """
+        if isinstance(element, tuple):
+            # We're searching for a function (node)
+            return element in self.graph.nodes
+        # We're searching for a call edge
+        return self.graph.has_edge(*element)
+
+    def contains_func(self, function: str, *layers: CGLayer) -> bool:
+        """Qualified function membership test.
+
+        If layers are not specified, a simple membership test disregarding layers is performed
+        If at least one layer is specified, the membership test will succeed if the function is in
+        the CG and belongs to at least one of the specified layers.
+
+        :param function: the function to test.
+        :param layers: the layers to restrict the membership test to.
+        :return: ``True`` if the function is in the CG and belongs to at least one of the layers
+                 (if specified), ``False`` otherwise.
+        """
+        if function in self.graph.nodes:
+            return not layers or self.graph.nodes[function]["meta"].layers & set(layers)
+        return False
+
+    def contains_call(self, source: str, destination: str, *layers: CGLayer) -> bool:
+        """Qualified function call membership test.
+
+        If layers are not specified, a simple membership test disregarding layers is performed
+        If at least one layer is specified, the membership test will succeed if the function call
+        is in the CG and belongs to at least one of the specified layers.
+
+        :param source: the source function of the call edge (caller).
+        :param destination: the destination function of the call edge (callee).
+        :param layers: the layers to restrict the membership test to.
+        :return: ``True`` if the call edge is in the CG and belongs to at least one of the layers
+                 (if specified), ``False`` otherwise.
+        """
+        if self.graph.has_edge(source, destination):
+            return not layers or self.graph.edges[source, destination]["meta"].layers & set(layers)
+        return False
+
+    def functions(self, *layers: CGLayer) -> Iterator[tuple[str, FuncCFG | None, CGElementLayers]]:
+        """Provide the functions stored in the CG layer(s) along with their CFGs and metadata.
+
+        :param layers: CG layers from which to provide the functions. A function is returned if it
+               is associated with at least one of the specified layers. If not specified, the
+               method will provide functions from all layers.
+        :return: an iterator over functions associated with the CG layer(s).
+        """
+        _layers = set(layers)
+        for func_name, node_data in self.graph.nodes.items():
+            # Filter by layers, if requested
+            if not layers or node_data["meta"].layers & _layers:
+                yield func_name, node_data.get("cfg", None), node_data["meta"]
+
+    def calls(self, *layers: CGLayer) -> Iterator[tuple[str, str, CGElementLayers]]:
+        """Provide the call edges stored in the CG layer(s) along with their metadata.
+
+        :param layers: CG layers to restrict the iterator to. A call edge is returned if it is
+               associated with at least one of the specified layers. If not specified, the method
+               will provide call edges from all layers.
+        :return: an iterator over call edges associated with the CG layer(s).
+        """
+        _layers = set(layers)
+        for source, destination, edge_data in self.graph.edges.items():
+            # Filter by layers, if requested
+            if not layers or edge_data["meta"].layers & _layers:
+                yield source, destination, edge_data["meta"]
+
+    def callers(self, function: str, *layers: CGLayer) -> set[str]:
+        """Provide callers associated with the CG layers for the given function.
+
+        :param function: the function for which to find its callers.
+        :param layers: CG layers to restrict the search to. A caller is returned if it is
+               associated with at least one of the specified layers. If not specified, the method
+               will provide callers from all layers.
+        :return: the function callers associated with the given layers, if specified.
+        """
+        _layers = set(layers)
+        return {
+            caller
+            for caller in self.graph.predecessors(function)
+            if not _layers or self.graph.edges[caller, function]["meta"].layers & _layers
+        }
+
+    def callees(self, function: str, *layers: CGLayer) -> set[str]:
+        """Provide callees associated with the CG layers for the given function.
+
+        :param function: the function for which to find its callees.
+        :param layers: CG layers to restrict the search to. A callee is returned if it is
+               associated with at least one of the specified layers. If not specified, the method
+               will provide callees from all layers.
+        :return: the function callers associated with the given layers, if specified.
+        """
+        _layers = set(layers)
+        return {
+            callee
+            for callee in self.graph.successors(function)
+            if not _layers or self.graph.edges[function, callee]["meta"].layers & _layers
+        }
+
+    @overload
+    def get_element_data(self, element: str, attribute: Literal["cfg"]) -> FuncCFG | None:
+        ...
+
+    @overload
+    def get_element_data(
+        self, element: str | tuple[str, str], attribute: Literal["meta"]
+    ) -> CGElementLayers | None:
+        ...
+
+    @overload
+    def get_element_data(self, element: str | tuple[str, str], attribute: str) -> object | None:
+        ...
+
+    def get_element_data(
+        self, element: str | tuple[str, str], attribute: str
+    ) -> CGElementLayers | FuncCFG | object | None:
+        """Get custom data associated with a graph element.
+
+        :param element: function name for a node or source and destination function names for edge.
+        :param attribute: the attribute under which the custom data are stored.
+        :return: the custom data associated with the specified element or ``None`` if not found.
+        """
+        try:
+            if isinstance(element, tuple):
+                return self.graph.edges[element[0], element[1]][attribute]
+            return self.graph.nodes[element][attribute]
+        except KeyError:
+            return None
+
+    def get_cfg(self, function: str) -> FuncCFG | None:
+        """Get CFG associated with the specified function.
+
+        This function is a specialization of the :meth:`~get_element_data` that is more
+        user-friendly and avoids unnecessary isinstance checks.
+
+        :param function: function name for which to retrieve the CFG.
+        :return: the function's CFG or ``None`` if not found.
+        """
+        func = self.graph.nodes.get(function, None)
+        return None if func is None else func.get("cfg", None)
 
     def add_entry_point(self, entry_point: str, layer: CGLayer) -> bool:
         """Add a new entry point for the given CG layer.
@@ -284,8 +436,8 @@ class CallGraph:
     def get_layer_cg(self, *layers: CGLayer) -> CallGraphView:
         """Obtain a CG subgraph containing only the selected layer(s).
 
-        The resulting CG subgraph is a static view of the CG, that is, it is not be possible to
-        modify the CG and it will also not reflect any changes made to the CG in the meantime.
+        The resulting CG subgraph is a static view of the CG, that is, it is not possible to
+        modify the CG, and it will also not reflect any changes made to the CG in the meantime.
 
         :param layers: the layers that induce the CG subgraph.
 
@@ -305,6 +457,24 @@ class CallGraph:
                 )
             )
         )
+
+    def update_dynamic_from(self, other: CallGraph) -> None:
+        # TODO: implement
+        pass
+
+    def diff(self, other: CallGraph, *layers: CGLayer) -> CallGraphDiff:
+        """Calculate the difference between two CGs w.r.t. the specified layers.
+
+        The diff calculation identifies which functions are common for both CGs, functions that
+        have been renamed or changed, and much more. See the :class:`~cg_diff.CallGraphDiff` for
+        more details.
+
+        :param other: the other CG.
+        :param layers: CG layers to restrict the diff to. If not specified, the diff is computed
+               for the RAW layer.
+        :return: the computed diff of this and the other CG.
+        """
+        return CallGraphDiff(self, other, *layers)
 
     def recalculate(self, *layers: CGLayer) -> None:
         """Recalculate the requested CG layers.
@@ -373,11 +543,11 @@ class CallGraph:
             node = process.pop()
             visited.add(node)
             self.graph.nodes[node]["meta"].add(self._modified, layer)
-            for succ in self.graph.successors(node):
+            for successor in self.graph.successors(node):
                 # We inspect only the edges here since the layers of the edge imply the layers of
                 # the nodes (i.e., edge may not support layers that the nodes do not).
-                if self.graph.edges[node, succ]["meta"].supports_any(req_layers):
-                    self.graph.edges[node, succ]["meta"].add(self._modified, layer)
+                if self.graph.edges[node, successor]["meta"].supports_any(req_layers):
+                    self.graph.edges[node, successor]["meta"].add(self._modified, layer)
             process |= set(self.graph.successors(node)) - visited
         unreachable_nodes = {
             attr["name"] for _, attr in self.graph.nodes(data=True) if layer in attr["meta"]
