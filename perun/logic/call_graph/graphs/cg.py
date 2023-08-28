@@ -40,6 +40,7 @@ Glossary:
 from __future__ import annotations
 from collections.abc import Iterator
 from typing import overload, Literal
+from typing_extensions import Self
 
 import networkx as nx
 
@@ -443,38 +444,66 @@ class CallGraph:
 
         :return: a layer(s) subgraph of the CG.
         """
-        layers_set = set(layers)
-        if CGLayer(None) in layers_set:
-            return CallGraphView(self.graph)
-        self.recalculate(*layers)
-        meta: CGElementLayers
-        return CallGraphView(
-            nx.DiGraph(
-                self.graph.edge_subgraph(
-                    (edge_from, edge_to)
-                    for edge_from, edge_to, meta in self.graph.edges(data="meta")
-                    if meta.supports_any(layers_set)
-                )
-            )
+        return CallGraphView(self, *layers)
+
+    def update_dynamic_from(self, source: CallGraph | CallGraphDiff) -> Self:
+        """Update the current (*target*) CG with dynamic information from another (*baseline*) CG.
+
+        In general, RAW and STATIC call graphs do not contain complete information about function
+        call relations. Some of the call relations can't be statically inferred and are instead
+        discovered dynamically during runtime. However, such dynamic information are usually quite
+        expensive to obtain and as such, they should be reused as much as possible.
+
+        This method attempts to identify dynamic call information form another CG that can be
+        safely reused in this CG. By safely, we mean that either (a) the dynamic caller function
+        has not changed between the two CG versions, or (b) if it did change, the RAW callee
+        contexts of the dynamic caller function did not change (w.r.t. the identified renames).
+
+        :param source: the *baseline* CG or a CG Diff between the *baseline* and current (*target*)
+               CGs. If a *baseline* CG is provided, the CG Diff will be calculated and discarded.
+        :returns: the updated *target* CG (self).
+        """
+        # Unify the input
+        baseline: CallGraph
+        cg_diff: CallGraphDiff
+        baseline, cg_diff = (
+            (source.cg_base, source)
+            if isinstance(source, CallGraphDiff)
+            else (source, source.diff(self))
         )
 
-    def update_dynamic_from(self, other: CallGraph) -> None:
-        # TODO: implement
-        pass
+        dyn_layer = CGLayer(CGFlavour.DYNAMIC)
+        raw_layer = CGLayer(CGFlavour.RAW)
+        # Iterate over all matched functions in CG Diff
+        for base_func, target_func, changed in cg_diff.iter_matches():
+            if changed:
+                # The function has changed, check at least its RAW callee context remained the same
+                raw_callees_renamed = set(cg_diff.get_all(*baseline.callees(base_func, raw_layer)))
+                if raw_callees_renamed != self.callees(target_func, raw_layer):
+                    # The function and its callee ctx have changed, do not reuse dynamic information
+                    continue
+            # We can reuse the dynamic information: copy all dynamic call edges from this function
+            edges = [
+                (target_func, target_callee)
+                for target_callee in cg_diff.get_all(*baseline.callees(base_func, dyn_layer))
+                if target_callee is not None
+            ]
+            self.add_call_relations(*edges, layer=dyn_layer)
+        return self
 
-    def diff(self, other: CallGraph, *layers: CGLayer) -> CallGraphDiff:
-        """Calculate the difference between two CGs w.r.t. the specified layers.
+    def diff(self, target: CallGraph, *layers: CGLayer) -> CallGraphDiff:
+        """Calculate the difference between this (baseline) and target CGs w.r.t. specified layers.
 
         The diff calculation identifies which functions are common for both CGs, functions that
         have been renamed or changed, and much more. See the :class:`~cg_diff.CallGraphDiff` for
         more details.
 
-        :param other: the other CG.
+        :param target: the target CG.
         :param layers: CG layers to restrict the diff to. If not specified, the diff is computed
                for the RAW layer.
         :return: the computed diff of this and the other CG.
         """
-        return CallGraphDiff(self, other, *layers)
+        return CallGraphDiff(self, target, *layers)
 
     def recalculate(self, *layers: CGLayer) -> None:
         """Recalculate the requested CG layers.
@@ -552,6 +581,9 @@ class CallGraph:
         unreachable_nodes = {
             attr["name"] for _, attr in self.graph.nodes(data=True) if layer in attr["meta"]
         } - visited
+        # TODO: this might be a problem when updating dynamic information from previous CGs!
+        #       Maybe move the reachability logic to CGView creation as it is relevant for levels
+        #       computation? This makes more sense imo
         self.remove_functions(*unreachable_nodes, layer=layer)
         self._modified.recalculated(layer)
 
@@ -559,5 +591,5 @@ class CallGraph:
 # TODO: placeholder
 class CallGraphView:
     # This will contain the layers CG subgraph with entry points, iteration functions, etc.
-    def __init__(self, subgraph: nx.DiGraph) -> None:
-        self.graph = subgraph
+    def __init__(self, base: CallGraph, *layers: CGLayer) -> None:
+        self.graph = base

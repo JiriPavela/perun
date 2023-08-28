@@ -29,8 +29,7 @@ from perun.logic.call_graph.graphs.func_equality import KnownRenames
 from perun.logic.call_graph.structs import FuncEq, CGLayer, CGFlavour
 
 if TYPE_CHECKING:
-    from perun.logic.call_graph.graphs.cg import CallGraph
-    from perun.logic.call_graph.graphs.cfg import FuncCFG, CFGSummary
+    from perun.logic.call_graph.graphs import CallGraph, FuncCFG, CFGSummary
 
 
 # Function caller/callee context (a collection of function names)
@@ -212,6 +211,17 @@ class CallGraphDiff:
         except KeyError:
             return None
 
+    def get_all(self, *functions: str) -> Iterator[str | None]:
+        """Get the corresponding *target* name for each *baseline* function name, if it exists.
+
+        This method generalizes the :meth:`get` method for multiple functions.
+
+        :param functions: the *baseline* function names to translate.
+        :return: the corresponding *target* function names or None for those not found.
+        """
+        for func in functions:
+            yield self.get(func)
+
     def function_status(self, func: str) -> FuncStatus:
         """Determines the function diff status.
 
@@ -242,6 +252,18 @@ class CallGraphDiff:
         elif func in self.name_only_matches:
             status = FuncStatus.NAME_ONLY_MATCHED
         return status
+
+    def iter_matches(self) -> Iterator[tuple[str, str, bool]]:
+        """Iterate over matched functions, their *target* name and change status.
+
+        :return: (*baseline* name, *target* name, change status) for all matched functions.
+        """
+        for func in self.matches | self.name_only_matches:
+            # Those functions were not renamed, the baseline and target names are the same
+            yield func, func, func in self.changed_functions
+        for base_name, target_name in self.renames.items():
+            # Those functions were renamed, baseline and target names are different
+            yield base_name, target_name, base_name in self.changed_functions
 
     def add_match(self, func: str, func_target: str) -> None:
         """Register a matched function.
